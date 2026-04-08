@@ -27,13 +27,13 @@ Built for Claude Code **Pro and Max** subscribers who run it all day across mult
 
 ## Installation
 
-**With Go 1.21+**
+**With Go 1.25+**
 
 ```sh
 go install github.com/sadhakbj/clauditor@latest
 ```
 
-This installs the binary to `$GOPATH/bin` (usually `~/go/bin`). Make sure that's on your `$PATH`:
+This installs the binary to `$GOPATH/bin` (usually `~/go/bin`). Run the same command to update to the latest version. Make sure that's on your `$PATH`:
 
 ```sh
 export PATH="$PATH:$(go env GOPATH)/bin"
