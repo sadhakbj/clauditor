@@ -14,9 +14,9 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "claude-usage",
+	Use:   "clauditor",
 	Short: "Claude Code usage dashboard",
-	Long:  "Track and visualize Claude Code token usage from your local transcript files.",
+	Long:  "Clauditor — see exactly where your Claude Code tokens and costs are going.",
 }
 
 var scanCmd = &cobra.Command{
@@ -56,6 +56,14 @@ var dashboardCmd = &cobra.Command{
 	},
 }
 
+var tuiCmd = &cobra.Command{
+	Use:   "tui",
+	Short: "Launch interactive terminal UI (k9s-style)",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runTUI()
+	},
+}
+
 func init() {
 	rootCmd.PersistentFlags().StringVar(&dbPath, "db", dbPath, "Path to SQLite database")
 	rootCmd.PersistentFlags().StringVar(&projectsDir, "dir", projectsDir, "Path to Claude projects directory")
@@ -63,7 +71,7 @@ func init() {
 	dashboardCmd.Flags().IntVar(&flagPort, "port", 8080, "Port for the dashboard server")
 	dashboardCmd.Flags().BoolVar(&flagNoBrowser, "no-browser", false, "Don't open browser automatically")
 
-	rootCmd.AddCommand(scanCmd, todayCmd, statsCmd, dashboardCmd)
+	rootCmd.AddCommand(scanCmd, todayCmd, statsCmd, dashboardCmd, tuiCmd)
 }
 
 func main() {

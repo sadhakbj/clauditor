@@ -1,36 +1,69 @@
-# claude-usage
+# clauditor
 
-A CLI tool to track and visualize your Claude Code token usage locally. Parses the JSONL transcript files that Claude Code writes to disk and stores them in a local SQLite database — no API key needed.
+Claude.ai shows you a usage bar. **Clauditor shows you everything else.**
 
-Works for Claude Code **Pro and Max** subscribers.
+Which project burned through the most tokens this week? Which session cost $12 in one sitting? How much are you actually saving from prompt caching? Your Claude Code subscription gives you none of this — clauditor does.
 
-## How it works
+It parses the JSONL transcripts that Claude Code writes locally, stores them in a SQLite database on your machine, and gives you a terminal UI and web dashboard to explore your usage. No API key. No account. Completely offline.
 
-Claude Code stores conversation transcripts as JSONL files under `~/.claude/projects/`. `claude-usage` reads those files, extracts token counts and model info from each turn, and writes them to `~/.claude/usage.db`. From there you can print summaries or spin up a local web dashboard.
+Built for Claude Code **Pro and Max** subscribers who run it all day across multiple projects and want to know where their usage is actually going.
 
-## Requirements
+---
 
-- Go 1.21+
-- Claude Code installed and used at least once
+## What you get that Claude.ai doesn't
+
+| | Claude.ai | clauditor |
+|---|---|---|
+| Usage bar (% of limit) | ✓ | ✓ |
+| Cost per session | ✗ | ✓ |
+| Breakdown by project | ✗ | ✓ |
+| Daily usage trends | ✗ | ✓ |
+| Cache read vs creation savings | ✗ | ✓ |
+| API-equivalent cost estimates | ✗ | ✓ |
+| Model-by-model breakdown | ✗ | ✓ |
+| Works offline, no account | ✗ | ✓ |
+
+---
 
 ## Installation
 
-```sh
-git clone https://github.com/sadhakbj/claude-usage
-cd claude-usage
-go build -o claude-usage .
-```
-
-Optionally move the binary somewhere on your `$PATH`:
+**With Go 1.21+**
 
 ```sh
-mv claude-usage /usr/local/bin/
+go install github.com/sadhakbj/clauditor@latest
 ```
+
+This installs the binary to `$GOPATH/bin` (usually `~/go/bin`). Make sure that's on your `$PATH`:
+
+```sh
+export PATH="$PATH:$(go env GOPATH)/bin"
+```
+
+**Without Go** — download a pre-built binary for your platform from [GitHub Releases](https://github.com/sadhakbj/clauditor/releases) and put it somewhere on your `$PATH`.
+
+---
+
+## Quick start
+
+No setup required. The database (`~/.claude/usage.db`) is created automatically on first run.
+
+```sh
+# Scan your transcripts and open the dashboard
+clauditor dashboard
+
+# Or use the terminal UI
+clauditor tui
+
+# Just check today's usage
+clauditor today
+```
+
+---
 
 ## Usage
 
 ```
-claude-usage [command] [flags]
+clauditor [command] [flags]
 ```
 
 ### Commands
@@ -39,8 +72,9 @@ claude-usage [command] [flags]
 |---------|-------------|
 | `scan` | Parse JSONL transcripts and write to the database |
 | `today` | Print today's usage broken down by model |
-| `stats` | Print all-time statistics (by model, top projects, daily averages) |
-| `dashboard` | Run `scan` then start a local web dashboard |
+| `stats` | Print all-time statistics |
+| `dashboard` | Scan + start a local web dashboard |
+| `tui` | Launch the interactive terminal UI |
 
 ### Global flags
 
@@ -53,41 +87,59 @@ claude-usage [command] [flags]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--port` | `8080` | Port for the dashboard server |
+| `--port` | `8080` | Port for the web dashboard |
 | `--no-browser` | `false` | Don't open the browser automatically |
 
-### Examples
+---
+
+## Web dashboard
+
+Runs at `http://localhost:8080`. Shows:
+
+- KPIs: sessions, turns, input/output tokens, cache usage, estimated cost
+- Daily token usage (stacked: input / output / cache read / cache creation)
+- Breakdown by model
+- Top projects by cost
+- Session table
+
+Filter by model and date range (today / 7d / 30d / 90d / all time). Refreshes automatically every 60 seconds — no page reload.
+
+![Web dashboard](docs/images/web-dashboard.png)
+
+![Project-specific usage](docs/images/project-specific-usage.png)
+
+## Terminal UI
 
 ```sh
-# First scan, then check today
-claude-usage scan
-claude-usage today
-
-# All-time stats
-claude-usage stats
-
-# Web dashboard on a custom port, no auto-open
-claude-usage dashboard --port 9090 --no-browser
-
-# Use a non-default projects directory or database
-claude-usage scan --dir ~/work/.claude/projects --db ~/work/usage.db
+clauditor tui
 ```
 
-## Dashboard
+![Terminal UI](docs/images/tui.png)
 
-The dashboard runs at `http://localhost:8080` (or your chosen port) and shows:
+| Key | Action |
+|-----|--------|
+| `1` / `2` / `3` | Overview / Sessions / Models |
+| `tab` | Cycle views |
+| `t / d / w / m / a` | Date range: today / 7d / 30d / 90d / all |
+| `j / k` or `↑ / ↓` | Scroll / navigate |
+| `r` | Re-scan and refresh |
+| `/` | Filter sessions |
+| `?` | Help |
+| `q` | Quit |
 
-- Daily token usage over time (chart)
-- Breakdown by model (chart)
-- Top projects by token volume (chart)
-- Recent sessions table
-- Cost by model table
+---
 
-Use the filter controls to narrow down by model or date range (7d / 30d / 90d / all).
+## How it works
+
+Claude Code writes every conversation as a JSONL file under `~/.claude/projects/`. Each line is a turn — it includes the model used, input tokens, output tokens, and cache token counts. Clauditor reads those files, aggregates them into a local SQLite database, and renders the results.
+
+Nothing leaves your machine.
+
+---
 
 ## Cost estimates
 
-Costs are estimated using Anthropic API pricing (April 2026 rates) and are approximations — your actual Claude Code subscription cost may differ.
+Estimated using Anthropic API pricing (April 2026). Your subscription cost is different — these numbers show what the same usage would cost on the pay-as-you-go API, which is useful if you're evaluating whether Claude Code is worth it for your team, or comparing projects by spend.
 
 | Model | Input | Output | Cache write | Cache read |
 |-------|-------|--------|-------------|------------|
@@ -95,9 +147,13 @@ Costs are estimated using Anthropic API pricing (April 2026 rates) and are appro
 | Sonnet 4.x | $3.69/M | $18.45/M | $4.61/M | $0.37/M |
 | Haiku 4.x | $1.23/M | $6.15/M | $1.54/M | $0.12/M |
 
+---
+
 ## Tech
 
-- Pure Go, single binary
-- SQLite via [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite) (no CGo)
+- Pure Go, single static binary (no CGo)
+- SQLite via [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite)
 - CLI via [Cobra](https://github.com/spf13/cobra)
-- Dashboard frontend: vanilla JS + [Chart.js](https://www.chartjs.org/) (embedded in binary)
+- Terminal UI via [Bubble Tea](https://github.com/charmbracelet/bubbletea) + [ntcharts](https://github.com/NimbleMarkets/ntcharts)
+- Web dashboard: Vue 3 + [Chart.js](https://www.chartjs.org/) (embedded in binary)
+- Releases via [GoReleaser](https://goreleaser.com/) + GitHub Actions

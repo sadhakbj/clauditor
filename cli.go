@@ -130,16 +130,16 @@ func hr(char string, width int) {
 	cDim.Println(strings.Repeat(char, width))
 }
 
-// ── requireDB opens the DB or exits with an error ────────────────────────────
+// ── requireDB opens (or creates) the DB, ensuring the schema exists ───────────
 
 func requireDB() *sql.DB {
-	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		color.Red("Database not found. Run: claude-usage scan")
-		os.Exit(1)
-	}
 	db, err := openDB(dbPath)
 	if err != nil {
 		color.Red("Error opening database: %v", err)
+		os.Exit(1)
+	}
+	if err := initDB(db); err != nil {
+		color.Red("Error initializing database: %v", err)
 		os.Exit(1)
 	}
 	return db

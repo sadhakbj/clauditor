@@ -1,6 +1,12 @@
-server.log
+# Binaries
+clauditor
+clauditor.exe
 
-# Go build artifacts
-go/claude-usage
-go/go
-go/*.exe
+# Go build cache
+*.test
+
+# Local database (default path is ~/.claude/usage.db, but ignore any local override)
+*.db
+
+# GoReleaser output
+dist/

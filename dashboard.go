@@ -14,6 +14,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+
 //go:embed web/index.html
 var indexHTML string
 
