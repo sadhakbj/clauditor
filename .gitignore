@@ -1,0 +1,6 @@
+server.log
+
+# Go build artifacts
+go/claude-usage
+go/go
+go/*.exe

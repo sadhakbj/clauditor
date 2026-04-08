@@ -1,0 +1,1118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>claude-usage</title>
+<script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ── Dark theme (default) ──────────────────────────────────────────────────── */
+:root {
+  --bg:       #09090b;
+  --surface:  #111113;
+  --card:     #18181b;
+  --border:   #27272a;
+  --border-2: #3f3f46;
+  --text:     #f4f4f5;
+  --sub:      #a1a1aa;
+  --muted:    #52525b;
+
+  --em:       #10b981;
+  --em-light: #34d399;
+  --em-dim:   rgba(16,185,129,0.12);
+  --blue:     #3b82f6;
+  --blue-dim: rgba(59,130,246,0.12);
+  --amber:    #f59e0b;
+  --amber-dim:rgba(245,158,11,0.12);
+  --red:      #ef4444;
+
+  --chart-grid: #27272a;
+  --chart-text: #52525b;
+
+  --sidebar-w: 228px;
+  --r: 8px;
+  --font: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+}
+
+/* ── Light theme ───────────────────────────────────────────────────────────── */
+html.light {
+  --bg:       #f8fafc;
+  --surface:  #f1f5f9;
+  --card:     #ffffff;
+  --border:   #e2e8f0;
+  --border-2: #cbd5e1;
+  --text:     #0f172a;
+  --sub:      #475569;
+  --muted:    #94a3b8;
+
+  --em:       #059669;
+  --em-light: #10b981;
+  --em-dim:   rgba(5,150,105,0.08);
+  --blue:     #2563eb;
+  --blue-dim: rgba(37,99,235,0.08);
+  --amber:    #d97706;
+  --amber-dim:rgba(217,119,6,0.08);
+  --red:      #dc2626;
+
+  --chart-grid: #e2e8f0;
+  --chart-text: #94a3b8;
+}
+
+html { font-size: 14px; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+  transition: background 0.2s, color 0.2s;
+}
+
+/* ── App shell (flex: sidebar + content side by side) ─────────────────────── */
+#app {
+  display: flex;
+  min-height: 100vh;
+}
+
+/* ── Sidebar ──────────────────────────────────────────────────────────────── */
+.sidebar {
+  width: var(--sidebar-w);
+  flex-shrink: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 16px 18px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.brand-mark {
+  width: 30px; height: 30px;
+  background: var(--em);
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 15px;
+  flex-shrink: 0;
+  box-shadow: 0 0 14px rgba(16,185,129,0.3);
+}
+
+.brand-text { font-size: 14px; font-weight: 700; letter-spacing: -0.02em; }
+.brand-sub  { font-size: 10px; color: var(--muted); margin-top: 1px; }
+
+.sidebar-section { padding: 18px 16px 10px; flex-shrink: 0; }
+
+.sidebar-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+/* Range list */
+.range-list { display: flex; flex-direction: column; gap: 2px; }
+.range-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--sub);
+  border: none;
+  background: transparent;
+  width: 100%;
+  font-family: var(--font);
+  text-align: left;
+  transition: background 0.12s, color 0.12s;
+}
+.range-item:hover { background: rgba(128,128,128,0.08); color: var(--text); }
+.range-item.active { background: var(--em-dim); color: var(--em-light); font-weight: 600; }
+.range-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--border-2);
+  transition: background 0.12s;
+  flex-shrink: 0;
+}
+.range-item.active .range-dot { background: var(--em); }
+
+/* Model list */
+.model-list { display: flex; flex-direction: column; gap: 3px; }
+.model-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s;
+  user-select: none;
+}
+.model-item:hover { background: rgba(128,128,128,0.07); }
+.model-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  opacity: 0.3;
+  transition: opacity 0.12s;
+}
+.model-item.checked .model-dot { opacity: 1; }
+.model-name {
+  font-size: 12px;
+  color: var(--muted);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color 0.12s;
+}
+.model-item.checked .model-name { color: var(--text); }
+
+.dot-opus   { background: #a78bfa; }
+.dot-sonnet { background: #22d3ee; }
+.dot-haiku  { background: var(--em); }
+.dot-other  { background: var(--amber); }
+
+.sidebar-actions {
+  display: flex;
+  gap: 6px;
+  padding: 0 16px 6px;
+  flex-shrink: 0;
+}
+.sidebar-action-btn {
+  flex: 1;
+  padding: 5px 0;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+  font-family: var(--font);
+  transition: border-color 0.12s, color 0.12s;
+}
+.sidebar-action-btn:hover { border-color: var(--border-2); color: var(--sub); }
+
+.sidebar-footer {
+  margin-top: auto;
+  padding: 14px 16px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.sidebar-updated {
+  font-size: 11px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.live-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--em);
+  box-shadow: 0 0 5px var(--em);
+  animation: blink 2s ease-in-out infinite;
+  flex-shrink: 0;
+}
+@keyframes blink { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
+
+/* Theme toggle */
+.theme-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  cursor: pointer;
+  font-family: var(--font);
+  font-size: 12px;
+  color: var(--sub);
+  width: 100%;
+  transition: border-color 0.12s, color 0.12s, background 0.12s;
+}
+.theme-toggle:hover { border-color: var(--border-2); color: var(--text); background: rgba(128,128,128,0.06); }
+.theme-toggle-icon { font-size: 14px; }
+
+/* ── Mobile top bar ───────────────────────────────────────────────────────── */
+.topbar {
+  display: none;
+  position: sticky;
+  top: 0; z-index: 50;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0 16px;
+  height: 52px;
+  align-items: center;
+  justify-content: space-between;
+  transition: background 0.2s, border-color 0.2s;
+}
+.topbar-left { display: flex; align-items: center; gap: 8px; }
+.topbar-brand { font-weight: 700; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+.topbar-brand .brand-mark { width: 26px; height: 26px; font-size: 12px; }
+.topbar-right { display: flex; align-items: center; gap: 8px; }
+
+.icon-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 9px;
+  cursor: pointer;
+  color: var(--sub);
+  font-size: 14px;
+  line-height: 1;
+  transition: border-color 0.12s, color 0.12s;
+}
+.icon-btn:hover { border-color: var(--border-2); color: var(--text); }
+
+/* Overlay */
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  z-index: 39;
+  backdrop-filter: blur(2px);
+}
+
+/* ── Main ─────────────────────────────────────────────────────────────────── */
+.content {
+  flex: 1;
+  min-width: 0; /* prevents flex child from overflowing */
+  display: flex;
+  flex-direction: column;
+}
+
+.page {
+  flex: 1;
+  padding: 32px 28px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.page-header { display: flex; flex-direction: column; gap: 4px; }
+.page-title  { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
+.page-sub    { font-size: 13px; color: var(--sub); }
+
+/* ── KPI cards ────────────────────────────────────────────────────────────── */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+.kpi-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: border-color 0.15s, background 0.2s;
+}
+.kpi-card:hover { border-color: var(--border-2); }
+.kpi-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+}
+.kpi-value {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.kpi-sub { font-size: 11px; color: var(--muted); }
+
+/* Meta row */
+.meta-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+.meta-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  transition: background 0.2s, border-color 0.2s;
+}
+.meta-icon {
+  width: 34px; height: 34px;
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 15px;
+  flex-shrink: 0;
+}
+.icon-blue  { background: var(--blue-dim); }
+.icon-green { background: var(--em-dim); }
+.icon-amber { background: var(--amber-dim); }
+.meta-val { font-size: 16px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.meta-lbl { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.val-green { color: var(--em-light); }
+
+/* ── Charts ───────────────────────────────────────────────────────────────── */
+.charts-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 12px;
+}
+.chart-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.chart-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 18px;
+  transition: background 0.2s, border-color 0.2s;
+}
+.chart-head { margin-bottom: 16px; }
+.chart-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+.chart-wrap { position: relative; }
+.h260 { height: 260px; }
+.h200 { height: 200px; }
+
+/* ── Tables ───────────────────────────────────────────────────────────────── */
+.table-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  overflow: hidden;
+  transition: background 0.2s, border-color 0.2s;
+}
+.table-head {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.table-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.table-badge {
+  font-size: 11px; color: var(--muted);
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 20px; padding: 2px 8px;
+}
+.table-scroll { overflow-x: auto; }
+
+table { width: 100%; border-collapse: collapse; white-space: nowrap; }
+th {
+  padding: 9px 14px;
+  font-size: 10px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--muted); text-align: left;
+  background: rgba(128,128,128,0.04);
+  border-bottom: 1px solid var(--border);
+}
+td { padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 13px; }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: rgba(128,128,128,0.04); }
+
+.mono  { font-family: 'SF Mono','Fira Code',monospace; font-size: 12px; }
+.dim   { color: var(--sub); }
+.green { color: var(--em-light); }
+.na    { color: var(--muted); font-size: 11px; }
+.empty { text-align: center; padding: 32px; color: var(--muted); font-size: 13px; }
+
+/* ── Badge ────────────────────────────────────────────────────────────────── */
+.badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 8px; border-radius: 4px;
+  font-size: 11px; font-weight: 500; white-space: nowrap;
+}
+.badge-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+.badge.opus   { background: rgba(167,139,250,0.12); color: #a78bfa; }
+.badge.sonnet { background: rgba(34,211,238,0.10);  color: #22d3ee; }
+.badge.haiku  { background: var(--em-dim);           color: var(--em-light); }
+.badge.other  { background: var(--amber-dim);         color: var(--amber); }
+.badge.opus   .badge-dot { background: #a78bfa; }
+.badge.sonnet .badge-dot { background: #22d3ee; }
+.badge.haiku  .badge-dot { background: var(--em-light); }
+.badge.other  .badge-dot { background: var(--amber); }
+
+/* ── States ───────────────────────────────────────────────────────────────── */
+.loader {
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 14px; padding: 100px 40px;
+  color: var(--muted); font-size: 13px;
+}
+.spinner {
+  width: 28px; height: 28px;
+  border: 2px solid var(--border);
+  border-top-color: var(--em);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.error-box {
+  margin: 32px; padding: 16px 18px;
+  border: 1px solid rgba(239,68,68,0.3);
+  background: rgba(239,68,68,0.08);
+  border-radius: var(--r); color: #fca5a5; font-size: 13px;
+}
+
+/* ── Footer ───────────────────────────────────────────────────────────────── */
+.footer { padding: 18px 28px; border-top: 1px solid var(--border); margin-top: auto; }
+.footer p { color: var(--muted); font-size: 11px; line-height: 1.8; }
+.footer a { color: var(--sub); text-decoration: none; }
+.footer a:hover { color: var(--text); }
+
+/* ── Responsive ───────────────────────────────────────────────────────────── */
+@media (max-width: 1100px) {
+  .kpi-grid    { grid-template-columns: repeat(2, 1fr); }
+  .charts-grid { grid-template-columns: 1fr; }
+  .chart-row   { grid-template-columns: 1fr 1fr; }
+}
+
+@media (max-width: 768px) {
+  /* App becomes block so topbar stacks above content */
+  #app { display: block; }
+
+  /* Topbar appears */
+  .topbar { display: flex; }
+
+  /* Sidebar pulled out of flow → slides in as drawer */
+  .sidebar {
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    height: 100vh;
+    z-index: 40;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease, background 0.2s, border-color 0.2s;
+  }
+  .sidebar.open {
+    transform: translateX(0);
+    box-shadow: 8px 0 32px rgba(0,0,0,0.4);
+  }
+
+  .content { min-height: 100vh; }
+  .page    { padding: 20px 16px; gap: 18px; }
+
+  .kpi-grid    { grid-template-columns: 1fr 1fr; }
+  .meta-grid   { grid-template-columns: 1fr 1fr; }
+  .charts-grid { grid-template-columns: 1fr; }
+  .chart-row   { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 480px) {
+  .kpi-value { font-size: 20px; }
+  .meta-grid { grid-template-columns: 1fr; }
+  .page      { padding: 16px 12px; }
+}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- Overlay (mobile) -->
+  <transition name="fade">
+    <div v-if="sidebarOpen" class="overlay" @click="sidebarOpen = false"></div>
+  </transition>
+
+  <!-- Sidebar -->
+  <aside :class="['sidebar', { open: sidebarOpen }]">
+    <div class="sidebar-brand">
+      <div class="brand-mark">◈</div>
+      <div>
+        <div class="brand-text">claude-usage</div>
+        <div class="brand-sub">Usage Dashboard</div>
+      </div>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-label">Time Range</div>
+      <div class="range-list">
+        <button
+          v-for="r in RANGES" :key="r.key"
+          :class="['range-item', { active: selectedRange === r.key }]"
+          @click="selectedRange = r.key; sidebarOpen = false"
+        >
+          {{ r.label }}
+          <span class="range-dot"></span>
+        </button>
+      </div>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-label">Models</div>
+      <div class="model-list">
+        <div
+          v-for="m in sortedModels" :key="m"
+          :class="['model-item', { checked: selectedModels.has(m) }]"
+          @click="toggleModel(m)"
+        >
+          <span :class="['model-dot', 'dot-' + modelFamily(m)]"></span>
+          <span class="model-name">{{ m }}</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="sidebar-actions">
+      <button class="sidebar-action-btn" @click="selectAll">All</button>
+      <button class="sidebar-action-btn" @click="clearAll">None</button>
+    </div>
+
+    <div class="sidebar-footer">
+      <button class="theme-toggle" @click="toggleTheme">
+        <span>{{ isDark ? 'Light mode' : 'Dark mode' }}</span>
+        <span class="theme-toggle-icon">{{ isDark ? '☀️' : '🌙' }}</span>
+      </button>
+      <div class="sidebar-updated" v-if="lastUpdated">
+        <span class="live-dot"></span>
+        <span>{{ lastUpdated }}</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Mobile topbar -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <button class="icon-btn" @click="sidebarOpen = !sidebarOpen">☰</button>
+      <div class="topbar-brand">
+        <div class="brand-mark">◈</div>
+        claude-usage
+      </div>
+    </div>
+    <div class="topbar-right">
+      <button class="icon-btn" @click="toggleTheme">{{ isDark ? '☀️' : '🌙' }}</button>
+    </div>
+  </header>
+
+  <!-- Content -->
+  <div class="content">
+
+    <div v-if="loading" class="loader">
+      <div class="spinner"></div>
+      <span>Loading…</span>
+    </div>
+
+    <div v-else-if="error" class="error-box">{{ error }}</div>
+
+    <template v-else>
+      <div class="page">
+
+        <div class="page-header">
+          <div class="page-title">Overview</div>
+          <div class="page-sub">{{ rangeLabel }} · {{ filteredSessions.length }} sessions</div>
+        </div>
+
+        <!-- KPIs -->
+        <div class="kpi-grid">
+          <div class="kpi-card">
+            <div class="kpi-label">Sessions</div>
+            <div class="kpi-value">{{ totals.sessions.toLocaleString() }}</div>
+            <div class="kpi-sub">{{ rangeLabel.toLowerCase() }}</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Turns</div>
+            <div class="kpi-value">{{ fmt(totals.turns) }}</div>
+            <div class="kpi-sub">total API calls</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Input Tokens</div>
+            <div class="kpi-value">{{ fmt(totals.input) }}</div>
+            <div class="kpi-sub">prompt tokens</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Output Tokens</div>
+            <div class="kpi-value">{{ fmt(totals.output) }}</div>
+            <div class="kpi-sub">generated tokens</div>
+          </div>
+        </div>
+
+        <!-- Meta -->
+        <div class="meta-grid">
+          <div class="meta-card">
+            <div class="meta-icon icon-green">⚡</div>
+            <div>
+              <div class="meta-val">{{ fmt(totals.cache_read) }}</div>
+              <div class="meta-lbl">Cache Read · 90% cheaper</div>
+            </div>
+          </div>
+          <div class="meta-card">
+            <div class="meta-icon icon-amber">✦</div>
+            <div>
+              <div class="meta-val">{{ fmt(totals.cache_creation) }}</div>
+              <div class="meta-lbl">Cache Creation · 25% premium</div>
+            </div>
+          </div>
+          <div class="meta-card">
+            <div class="meta-icon icon-blue">$</div>
+            <div>
+              <div class="meta-val val-green">{{ fmtCostBig(totals.cost) }}</div>
+              <div class="meta-lbl">Est. Cost · API pricing Apr 2026</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Charts -->
+        <div class="charts-grid">
+          <div class="chart-card">
+            <div class="chart-head"><span class="chart-title">Daily Token Usage — {{ rangeLabel }}</span></div>
+            <div class="chart-wrap h260"><canvas id="chart-daily"></canvas></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-head"><span class="chart-title">By Model</span></div>
+            <div class="chart-wrap h260"><canvas id="chart-model"></canvas></div>
+          </div>
+        </div>
+        <div class="chart-row">
+          <div class="chart-card">
+            <div class="chart-head"><span class="chart-title">Top Projects</span></div>
+            <div class="chart-wrap h200"><canvas id="chart-project"></canvas></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-head"><span class="chart-title">Cost by Model</span></div>
+            <div class="chart-wrap h200"><canvas id="chart-cost"></canvas></div>
+          </div>
+        </div>
+
+        <!-- Sessions table -->
+        <div class="table-card">
+          <div class="table-head">
+            <span class="table-title">Recent Sessions</span>
+            <span class="table-badge">{{ visibleSessions.length }} of {{ filteredSessions.length }}</span>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Session</th><th>Project</th><th>Last Active</th>
+                  <th>Duration</th><th>Model</th><th>Turns</th>
+                  <th>Input</th><th>Output</th><th>Est. Cost</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-if="!visibleSessions.length"><td colspan="9" class="empty">No sessions found</td></tr>
+                <tr v-for="s in visibleSessions" :key="s.session_id">
+                  <td class="mono dim">{{ s.session_id }}…</td>
+                  <td>{{ s.project }}</td>
+                  <td class="dim">{{ s.last }}</td>
+                  <td class="dim">{{ s.duration_min }}m</td>
+                  <td><span :class="['badge', modelFamily(s.model)]"><span class="badge-dot"></span>{{ s.model }}</span></td>
+                  <td class="mono">{{ s.turns }}</td>
+                  <td class="mono">{{ fmt(s.input) }}</td>
+                  <td class="mono">{{ fmt(s.output) }}</td>
+                  <td v-if="isBillable(s.model)" class="mono green">{{ fmtCost(calcCost(s.model, s.input, s.output, s.cache_read, s.cache_creation)) }}</td>
+                  <td v-else class="na">—</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Model cost table -->
+        <div class="table-card">
+          <div class="table-head">
+            <span class="table-title">Cost by Model</span>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Model</th><th>Turns</th><th>Input</th><th>Output</th>
+                  <th>Cache Read</th><th>Cache Write</th><th>Est. Cost</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-if="!byModel.length"><td colspan="7" class="empty">No data</td></tr>
+                <tr v-for="m in byModel" :key="m.model">
+                  <td><span :class="['badge', modelFamily(m.model)]"><span class="badge-dot"></span>{{ m.model }}</span></td>
+                  <td class="mono">{{ fmt(m.turns) }}</td>
+                  <td class="mono">{{ fmt(m.input) }}</td>
+                  <td class="mono">{{ fmt(m.output) }}</td>
+                  <td class="mono">{{ fmt(m.cache_read) }}</td>
+                  <td class="mono">{{ fmt(m.cache_creation) }}</td>
+                  <td v-if="isBillable(m.model)" class="mono green">{{ fmtCost(calcCost(m.model, m.input, m.output, m.cache_read, m.cache_creation)) }}</td>
+                  <td v-else class="na">—</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </div><!-- /page -->
+
+      <footer class="footer">
+        <p>Cost estimates use Anthropic API pricing (Apr 2026). Actual Max/Pro subscription costs differ. · <a href="https://github.com/sadhakbj/claude-usage" target="_blank">github.com/sadhakbj/claude-usage</a></p>
+      </footer>
+    </template>
+
+  </div><!-- /content -->
+</div>
+
+<script>
+const { createApp, ref, computed, watch, onMounted, nextTick } = Vue
+
+// ── Pricing ──────────────────────────────────────────────────────────────────
+const PRICING = {
+  'claude-opus-4-6':   { input: 6.15,  output: 30.75, cache_write: 7.69, cache_read: 0.61 },
+  'claude-opus-4-5':   { input: 6.15,  output: 30.75, cache_write: 7.69, cache_read: 0.61 },
+  'claude-sonnet-4-6': { input: 3.69,  output: 18.45, cache_write: 4.61, cache_read: 0.37 },
+  'claude-sonnet-4-5': { input: 3.69,  output: 18.45, cache_write: 4.61, cache_read: 0.37 },
+  'claude-haiku-4-5':  { input: 1.23,  output:  6.15, cache_write: 1.54, cache_read: 0.12 },
+  'claude-haiku-4-6':  { input: 1.23,  output:  6.15, cache_write: 1.54, cache_read: 0.12 },
+}
+function isBillable(m) {
+  if (!m) return false
+  const ml = m.toLowerCase()
+  return ml.includes('opus') || ml.includes('sonnet') || ml.includes('haiku')
+}
+function getPricing(m) {
+  if (!m) return null
+  if (PRICING[m]) return PRICING[m]
+  for (const k of Object.keys(PRICING)) if (m.startsWith(k)) return PRICING[k]
+  const ml = m.toLowerCase()
+  if (ml.includes('opus'))   return PRICING['claude-opus-4-6']
+  if (ml.includes('sonnet')) return PRICING['claude-sonnet-4-6']
+  if (ml.includes('haiku'))  return PRICING['claude-haiku-4-5']
+  return null
+}
+function calcCost(model, inp, out, cr, cc) {
+  if (!isBillable(model)) return 0
+  const p = getPricing(model)
+  if (!p) return 0
+  return inp * p.input / 1e6 + out * p.output / 1e6 + cr * p.cache_read / 1e6 + cc * p.cache_write / 1e6
+}
+function fmt(n) {
+  if (n >= 1e9) return (n/1e9).toFixed(2)+'B'
+  if (n >= 1e6) return (n/1e6).toFixed(2)+'M'
+  if (n >= 1e3) return (n/1e3).toFixed(1)+'K'
+  return n.toLocaleString()
+}
+function fmtCost(c)    { return '$'+c.toFixed(4) }
+function fmtCostBig(c) { return '$'+c.toFixed(2) }
+function modelFamily(m) {
+  if (!m) return 'other'
+  const ml = m.toLowerCase()
+  if (ml.includes('opus'))   return 'opus'
+  if (ml.includes('sonnet')) return 'sonnet'
+  if (ml.includes('haiku'))  return 'haiku'
+  return 'other'
+}
+function modelPriority(m) {
+  return { opus:0, sonnet:1, haiku:2, other:3 }[modelFamily(m)]
+}
+
+const MC    = ['#22d3ee','#a78bfa','#10b981','#f59e0b','#f472b6','#60a5fa','#34d399','#fb923c']
+const RANGES = [
+  { key:'7d',  label:'Last 7 days'  },
+  { key:'30d', label:'Last 30 days' },
+  { key:'90d', label:'Last 90 days' },
+  { key:'all', label:'All time'     },
+]
+
+createApp({
+  setup() {
+    const rawData        = ref(null)
+    const selectedModels = ref(new Set())
+    const selectedRange  = ref('30d')
+    const loading        = ref(true)
+    const error          = ref('')
+    const lastUpdated    = ref('')
+    const sidebarOpen    = ref(false)
+    const isDark         = ref(true)
+    const charts         = {}
+
+    // ── Theme ──────────────────────────────────────────────────────────────
+    function applyTheme(dark) {
+      document.documentElement.classList.toggle('light', !dark)
+      localStorage.setItem('theme', dark ? 'dark' : 'light')
+    }
+    function toggleTheme() {
+      isDark.value = !isDark.value
+      applyTheme(isDark.value)
+      if (rawData.value) renderCharts()
+    }
+
+    // init theme from localStorage or system preference
+    const saved = localStorage.getItem('theme')
+    if (saved) {
+      isDark.value = saved === 'dark'
+    } else {
+      isDark.value = !window.matchMedia('(prefers-color-scheme: light)').matches
+    }
+    applyTheme(isDark.value)
+
+    // ── Chart colours (theme-aware) ─────────────────────────────────────────
+    function chartColors() {
+      return {
+        grid: isDark.value ? '#27272a' : '#e2e8f0',
+        text: isDark.value ? '#52525b' : '#94a3b8',
+        card: isDark.value ? '#18181b' : '#ffffff',
+        tc: {
+          input:          isDark.value ? 'rgba(59,130,246,0.8)'  : 'rgba(37,99,235,0.75)',
+          output:         isDark.value ? 'rgba(139,92,246,0.8)'  : 'rgba(124,58,237,0.7)',
+          cache_read:     isDark.value ? 'rgba(16,185,129,0.6)'  : 'rgba(5,150,105,0.6)',
+          cache_creation: isDark.value ? 'rgba(245,158,11,0.6)'  : 'rgba(217,119,6,0.6)',
+        }
+      }
+    }
+
+    // ── Derived data ────────────────────────────────────────────────────────
+    const sortedModels = computed(() => {
+      if (!rawData.value) return []
+      return [...rawData.value.all_models].sort((a,b) => modelPriority(a)-modelPriority(b) || a.localeCompare(b))
+    })
+    const rangeLabel = computed(() => RANGES.find(r => r.key === selectedRange.value)?.label ?? '')
+
+    function cutoff() {
+      if (selectedRange.value === 'all') return null
+      const days = { '7d':7, '30d':30, '90d':90 }[selectedRange.value]
+      const d = new Date(); d.setDate(d.getDate()-days)
+      return d.toISOString().slice(0,10)
+    }
+
+    const filteredDaily = computed(() => {
+      if (!rawData.value) return []
+      const c = cutoff()
+      return rawData.value.daily_by_model.filter(r => selectedModels.value.has(r.model) && (!c || r.day >= c))
+    })
+
+    const dailyAgg = computed(() => {
+      const map = {}
+      for (const r of filteredDaily.value) {
+        if (!map[r.day]) map[r.day] = { day:r.day, input:0, output:0, cache_read:0, cache_creation:0 }
+        map[r.day].input          += r.input
+        map[r.day].output         += r.output
+        map[r.day].cache_read     += r.cache_read
+        map[r.day].cache_creation += r.cache_creation
+      }
+      return Object.values(map).sort((a,b) => a.day.localeCompare(b.day))
+    })
+
+    const filteredSessions = computed(() => {
+      if (!rawData.value) return []
+      const c = cutoff()
+      return rawData.value.sessions_all.filter(s => selectedModels.value.has(s.model) && (!c || s.last_date >= c))
+    })
+
+    const visibleSessions = computed(() => filteredSessions.value.slice(0, 25))
+
+    const byModel = computed(() => {
+      const map = {}
+      for (const r of filteredDaily.value) {
+        if (!map[r.model]) map[r.model] = { model:r.model, input:0, output:0, cache_read:0, cache_creation:0, turns:0 }
+        map[r.model].input          += r.input
+        map[r.model].output         += r.output
+        map[r.model].cache_read     += r.cache_read
+        map[r.model].cache_creation += r.cache_creation
+        map[r.model].turns          += r.turns
+      }
+      return Object.values(map).sort((a,b) => (b.input+b.output)-(a.input+a.output))
+    })
+
+    const byProject = computed(() => {
+      const map = {}
+      for (const s of filteredSessions.value) {
+        if (!map[s.project]) map[s.project] = { project:s.project, input:0, output:0 }
+        map[s.project].input  += s.input
+        map[s.project].output += s.output
+      }
+      return Object.values(map).sort((a,b) => (b.input+b.output)-(a.input+a.output)).slice(0,8)
+    })
+
+    const totals = computed(() => {
+      const bm = byModel.value
+      return {
+        sessions:       filteredSessions.value.length,
+        turns:          bm.reduce((s,m)=>s+m.turns,0),
+        input:          bm.reduce((s,m)=>s+m.input,0),
+        output:         bm.reduce((s,m)=>s+m.output,0),
+        cache_read:     bm.reduce((s,m)=>s+m.cache_read,0),
+        cache_creation: bm.reduce((s,m)=>s+m.cache_creation,0),
+        cost:           bm.reduce((s,m)=>s+calcCost(m.model,m.input,m.output,m.cache_read,m.cache_creation),0),
+      }
+    })
+
+    // ── Filters ─────────────────────────────────────────────────────────────
+    function toggleModel(m) {
+      const s = new Set(selectedModels.value)
+      s.has(m) ? s.delete(m) : s.add(m)
+      selectedModels.value = s
+    }
+    function selectAll() { selectedModels.value = new Set(rawData.value?.all_models ?? []) }
+    function clearAll()  { selectedModels.value = new Set() }
+
+    // ── Charts ───────────────────────────────────────────────────────────────
+    function destroy(k) { if (charts[k]) { charts[k].destroy(); charts[k]=null } }
+
+    function renderDaily() {
+      destroy('daily')
+      const el = document.getElementById('chart-daily'); if (!el) return
+      const { grid, text, tc } = chartColors()
+      const daily = dailyAgg.value
+      const maxTicks = { '7d':7, '30d':15, '90d':13, 'all':12 }[selectedRange.value]
+      charts.daily = new Chart(el, {
+        type:'bar',
+        data:{
+          labels: daily.map(d=>d.day),
+          datasets:[
+            { label:'Input',          data:daily.map(d=>d.input),          backgroundColor:tc.input,          stack:'s' },
+            { label:'Output',         data:daily.map(d=>d.output),         backgroundColor:tc.output,         stack:'s' },
+            { label:'Cache Read',     data:daily.map(d=>d.cache_read),     backgroundColor:tc.cache_read,     stack:'s' },
+            { label:'Cache Creation', data:daily.map(d=>d.cache_creation), backgroundColor:tc.cache_creation, stack:'s' },
+          ]
+        },
+        options:{
+          responsive:true, maintainAspectRatio:false,
+          plugins:{ legend:{ labels:{ color:text, boxWidth:11, font:{size:11} } } },
+          scales:{
+            x:{ ticks:{ color:text, maxTicksLimit:maxTicks, font:{size:11} }, grid:{ color:grid } },
+            y:{ ticks:{ color:text, callback:v=>fmt(v), font:{size:11} }, grid:{ color:grid } },
+          }
+        }
+      })
+    }
+
+    function renderModel() {
+      destroy('model')
+      const bm = byModel.value
+      const el = document.getElementById('chart-model'); if (!el||!bm.length) return
+      const { card, text } = chartColors()
+      charts.model = new Chart(el, {
+        type:'doughnut',
+        data:{
+          labels: bm.map(m=>m.model),
+          datasets:[{ data:bm.map(m=>m.input+m.output), backgroundColor:MC, borderWidth:2, borderColor:card }]
+        },
+        options:{
+          responsive:true, maintainAspectRatio:false,
+          plugins:{
+            legend:{ position:'bottom', labels:{ color:text, boxWidth:9, font:{size:10}, padding:8 } },
+            tooltip:{ callbacks:{ label:c=>` ${c.label}: ${fmt(c.raw)}` } }
+          }
+        }
+      })
+    }
+
+    function renderProject() {
+      destroy('project')
+      const bp = byProject.value
+      const el = document.getElementById('chart-project'); if (!el||!bp.length) return
+      const { grid, text, tc } = chartColors()
+      charts.project = new Chart(el, {
+        type:'bar',
+        data:{
+          labels: bp.map(p=>p.project.length>26?'…'+p.project.slice(-24):p.project),
+          datasets:[
+            { label:'Input',  data:bp.map(p=>p.input),  backgroundColor:tc.input },
+            { label:'Output', data:bp.map(p=>p.output), backgroundColor:tc.output },
+          ]
+        },
+        options:{
+          indexAxis:'y', responsive:true, maintainAspectRatio:false,
+          plugins:{ legend:{ labels:{ color:text, boxWidth:11, font:{size:11} } } },
+          scales:{
+            x:{ ticks:{ color:text, callback:v=>fmt(v), font:{size:10} }, grid:{ color:grid } },
+            y:{ ticks:{ color:text, font:{size:10} }, grid:{ color:grid } },
+          }
+        }
+      })
+    }
+
+    function renderCostChart() {
+      destroy('cost')
+      const bm = byModel.value.filter(m=>isBillable(m.model))
+      const el = document.getElementById('chart-cost'); if (!el||!bm.length) return
+      const { card, text } = chartColors()
+      charts.cost = new Chart(el, {
+        type:'bar',
+        data:{
+          labels: bm.map(m=>m.model.length>20?'…'+m.model.slice(-18):m.model),
+          datasets:[{
+            label:'Est. Cost ($)',
+            data: bm.map(m=>+calcCost(m.model,m.input,m.output,m.cache_read,m.cache_creation).toFixed(4)),
+            backgroundColor: MC,
+            borderRadius:4,
+          }]
+        },
+        options:{
+          responsive:true, maintainAspectRatio:false,
+          plugins:{ legend:{ display:false } },
+          scales:{
+            x:{ ticks:{ color:text, font:{size:10} }, grid:{ color:'transparent' } },
+            y:{ ticks:{ color:text, callback:v=>'$'+v, font:{size:10} }, grid:{ color:chartColors().grid } },
+          }
+        }
+      })
+    }
+
+    function renderCharts() {
+      nextTick(() => { renderDaily(); renderModel(); renderProject(); renderCostChart() })
+    }
+
+    // ── Data ─────────────────────────────────────────────────────────────────
+    async function loadData() {
+      try {
+        const d = await fetch('/api/data').then(r=>r.json())
+        if (d.error) { error.value=d.error; loading.value=false; return }
+        const first = rawData.value===null
+        rawData.value = d
+        lastUpdated.value = d.generated_at
+        if (first) {
+          const billable = d.all_models.filter(m=>isBillable(m))
+          selectedModels.value = new Set(billable.length ? billable : d.all_models)
+          loading.value = false
+        }
+        renderCharts()
+      } catch(e) {
+        console.error(e)
+        if (loading.value) { error.value='Could not reach /api/data'; loading.value=false }
+      }
+    }
+
+    watch([selectedModels, selectedRange], () => { if (rawData.value) renderCharts() })
+    onMounted(() => { loadData(); setInterval(loadData, 30_000) })
+
+    return {
+      loading, error, lastUpdated, sidebarOpen, isDark,
+      sortedModels, selectedModels, selectedRange, RANGES, rangeLabel,
+      totals, byModel, visibleSessions, filteredSessions,
+      toggleModel, selectAll, clearAll, toggleTheme,
+      modelFamily, isBillable, calcCost, fmt, fmtCost, fmtCostBig,
+    }
+  }
+}).mount('#app')
+</script>
+</body>
+</html>
