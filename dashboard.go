@@ -23,6 +23,7 @@ var indexHTML string
 type dailyModelRow struct {
 	Day           string `json:"day"`
 	Model         string `json:"model"`
+	Source        string `json:"source"`
 	Input         int64  `json:"input"`
 	Output        int64  `json:"output"`
 	CacheRead     int64  `json:"cache_read"`
@@ -37,6 +38,7 @@ type sessionRow struct {
 	LastDate      string  `json:"last_date"`
 	DurationMin   float64 `json:"duration_min"`
 	Model         string  `json:"model"`
+	Source        string  `json:"source"`
 	Turns         int64   `json:"turns"`
 	Input         int64   `json:"input"`
 	Output        int64   `json:"output"`
@@ -44,9 +46,23 @@ type sessionRow struct {
 	CacheCreation int64   `json:"cache_creation"`
 }
 
+// toolSummary holds aggregated metrics for a single source tool (e.g. "claude"
+// or "cursor").
+type toolSummary struct {
+	Source        string  `json:"source"`
+	Sessions      int64   `json:"sessions"`
+	Turns         int64   `json:"turns"`
+	InputTokens   int64   `json:"input_tokens"`
+	OutputTokens  int64   `json:"output_tokens"`
+	CacheRead     int64   `json:"cache_read"`
+	CacheCreation int64   `json:"cache_creation"`
+}
+
 type dashboardData struct {
 	Error        string          `json:"error,omitempty"`
 	AllModels    []string        `json:"all_models"`
+	AllSources   []string        `json:"all_sources"`
+	ToolsSummary []toolSummary   `json:"tools_summary"`
 	DailyByModel []dailyModelRow `json:"daily_by_model"`
 	SessionsAll  []sessionRow    `json:"sessions_all"`
 	GeneratedAt  string          `json:"generated_at"`
@@ -55,7 +71,7 @@ type dashboardData struct {
 func getDashboardData() dashboardData {
 	db, err := openDB(dbPath)
 	if err != nil {
-		return dashboardData{Error: "Cannot open database. Run: claude-usage scan"}
+		return dashboardData{Error: "Cannot open database. Run: clauditor scan"}
 	}
 	defer db.Close()
 
@@ -74,35 +90,75 @@ func getDashboardData() dashboardData {
 		allModels = append(allModels, m)
 	}
 
-	// Daily per-model
+	// All sources
+	sourceRows, _ := db.Query(`
+		SELECT COALESCE(source, 'claude') as source
+		FROM turns
+		GROUP BY source
+		ORDER BY source`)
+	defer sourceRows.Close()
+
+	var allSources []string
+	for sourceRows.Next() {
+		var s string
+		sourceRows.Scan(&s)
+		allSources = append(allSources, s)
+	}
+
+	// Per-tool summary
+	tsRows, _ := db.Query(`
+		SELECT
+			COALESCE(source, 'claude')          as source,
+			COUNT(DISTINCT session_id)          as sessions,
+			COUNT(*)                            as turns,
+			SUM(input_tokens)                   as input_tokens,
+			SUM(output_tokens)                  as output_tokens,
+			SUM(cache_read_tokens)              as cache_read,
+			SUM(cache_creation_tokens)          as cache_creation
+		FROM turns
+		GROUP BY source
+		ORDER BY source`)
+	defer tsRows.Close()
+
+	var toolsSummary []toolSummary
+	for tsRows.Next() {
+		var ts toolSummary
+		tsRows.Scan(&ts.Source, &ts.Sessions, &ts.Turns,
+			&ts.InputTokens, &ts.OutputTokens, &ts.CacheRead, &ts.CacheCreation)
+		toolsSummary = append(toolsSummary, ts)
+	}
+
+	// Daily per-model (include source)
 	drows, _ := db.Query(`
 		SELECT
-			substr(timestamp, 1, 10)    as day,
-			COALESCE(model, 'unknown')  as model,
-			SUM(input_tokens)           as input,
-			SUM(output_tokens)          as output,
-			SUM(cache_read_tokens)      as cache_read,
-			SUM(cache_creation_tokens)  as cache_creation,
-			COUNT(*)                    as turns
+			substr(timestamp, 1, 10)             as day,
+			COALESCE(model, 'unknown')           as model,
+			COALESCE(source, 'claude')           as source,
+			SUM(input_tokens)                    as input,
+			SUM(output_tokens)                   as output,
+			SUM(cache_read_tokens)               as cache_read,
+			SUM(cache_creation_tokens)           as cache_creation,
+			COUNT(*)                             as turns
 		FROM turns
-		GROUP BY day, model
-		ORDER BY day, model`)
+		GROUP BY day, model, source
+		ORDER BY day, source, model`)
 	defer drows.Close()
 
 	var dailyByModel []dailyModelRow
 	for drows.Next() {
 		var r dailyModelRow
-		drows.Scan(&r.Day, &r.Model, &r.Input, &r.Output, &r.CacheRead, &r.CacheCreation, &r.Turns)
+		drows.Scan(&r.Day, &r.Model, &r.Source, &r.Input, &r.Output, &r.CacheRead, &r.CacheCreation, &r.Turns)
 		dailyByModel = append(dailyByModel, r)
 	}
 
-	// All sessions
+	// All sessions (include source)
 	srows, err := db.Query(`
 		SELECT
 			session_id, COALESCE(project_name,'unknown'), first_timestamp, last_timestamp,
 			total_input_tokens, total_output_tokens,
 			total_cache_read, total_cache_creation,
-			COALESCE(model,'unknown'), turn_count
+			COALESCE(model,'unknown'), turn_count,
+			COALESCE(source,'claude')
 		FROM sessions
 		ORDER BY last_timestamp DESC`)
 	if err != nil {
@@ -117,8 +173,9 @@ func getDashboardData() dashboardData {
 			inp, out, cr, cc          int64
 			model                     string
 			turns                     int64
+			source                    string
 		)
-		srows.Scan(&sid, &project, &first, &last, &inp, &out, &cr, &cc, &model, &turns)
+		srows.Scan(&sid, &project, &first, &last, &inp, &out, &cr, &cc, &model, &turns, &source)
 
 		durationMin := sessionDurationMin(first, last)
 		lastShort := last
@@ -142,6 +199,7 @@ func getDashboardData() dashboardData {
 			LastDate:      lastDate,
 			DurationMin:   durationMin,
 			Model:         model,
+			Source:        source,
 			Turns:         turns,
 			Input:         inp,
 			Output:        out,
@@ -152,6 +210,8 @@ func getDashboardData() dashboardData {
 
 	return dashboardData{
 		AllModels:    allModels,
+		AllSources:   allSources,
+		ToolsSummary: toolsSummary,
 		DailyByModel: dailyByModel,
 		SessionsAll:  sessionsAll,
 		GeneratedAt:  time.Now().Format("2006-01-02 15:04:05"),
@@ -212,7 +272,8 @@ func newDashboardMux() *http.ServeMux {
 	})
 
 	mux.HandleFunc("/api/data", func(w http.ResponseWriter, r *http.Request) {
-		scan(projectsDir, dbPath, false) // rescan on every poll so data stays fresh
+		scan(projectsDir, dbPath, false)       // rescan Claude on every poll
+		scanCursor(cursorDir, dbPath, false)   // rescan Cursor on every poll
 		data := getDashboardData()
 		body, err := json.Marshal(data)
 		if err != nil {

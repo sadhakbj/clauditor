@@ -148,9 +148,15 @@ func requireDB() *sql.DB {
 // ── Commands ──────────────────────────────────────────────────────────────────
 
 func cmdScan() {
-	cHeader.Printf("Scanning %s ...\n", projectsDir)
+	cHeader.Printf("Scanning Claude projects: %s ...\n", projectsDir)
 	if _, err := scan(projectsDir, dbPath, true); err != nil {
 		color.Red("Scan error: %v", err)
+		os.Exit(1)
+	}
+
+	cHeader.Printf("\nScanning Cursor data: %s ...\n", cursorDir)
+	if _, err := scanCursor(cursorDir, dbPath, true); err != nil {
+		color.Red("Cursor scan error: %v", err)
 		os.Exit(1)
 	}
 }
@@ -370,7 +376,7 @@ func cmdStats() {
 
 	fmt.Println()
 	hr("═", 60)
-	cHeader.Println("  Claude Code Usage  ─  All-Time Statistics")
+	cHeader.Println("  AI Tools Usage  ─  All-Time Statistics")
 	hr("═", 60)
 
 	cLabel.Print("  Period:           ")

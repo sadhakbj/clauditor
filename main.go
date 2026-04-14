@@ -1,4 +1,4 @@
-// main.go - Entry point for claude-usage CLI (Go implementation).
+// main.go - Entry point for clauditor CLI (Go implementation).
 package main
 
 import (
@@ -15,8 +15,8 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:   "clauditor",
-	Short: "Claude Code usage dashboard",
-	Long:  "Clauditor — see exactly where your Claude Code tokens and costs are going.",
+	Short: "AI tools usage dashboard",
+	Long:  "Clauditor — see exactly where your Claude Code and Cursor tokens and costs are going.",
 }
 
 var scanCmd = &cobra.Command{
@@ -67,6 +67,7 @@ var tuiCmd = &cobra.Command{
 func init() {
 	rootCmd.PersistentFlags().StringVar(&dbPath, "db", dbPath, "Path to SQLite database")
 	rootCmd.PersistentFlags().StringVar(&projectsDir, "dir", projectsDir, "Path to Claude projects directory")
+	rootCmd.PersistentFlags().StringVar(&cursorDir, "cursor-dir", cursorDir, "Path to Cursor user-data directory")
 
 	dashboardCmd.Flags().IntVar(&flagPort, "port", 8080, "Port for the dashboard server")
 	dashboardCmd.Flags().BoolVar(&flagNoBrowser, "no-browser", false, "Don't open browser automatically")

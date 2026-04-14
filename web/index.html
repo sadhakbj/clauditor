@@ -755,6 +755,144 @@
         color: var(--text);
       }
 
+      /* ── Tools section ────────────────────────────────────────────────────────── */
+      .tool-list {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+      }
+      .tool-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: background 0.12s;
+        user-select: none;
+      }
+      .tool-item:hover {
+        background: rgba(128, 128, 128, 0.07);
+      }
+      .tool-item.active {
+        background: var(--em-dim);
+      }
+      .tool-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+      .dot-claude { background: #0ea5e9; }
+      .dot-cursor { background: #a78bfa; }
+      .dot-all    { background: var(--em); }
+      .tool-name {
+        font-size: 12px;
+        color: var(--muted);
+        flex: 1;
+        transition: color 0.12s;
+      }
+      .tool-item.active .tool-name {
+        color: var(--text);
+        font-weight: 600;
+      }
+
+      /* ── Tools summary cards ───────────────────────────────────────────────── */
+      .tools-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        gap: 12px;
+      }
+      .tool-card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: var(--r);
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        cursor: pointer;
+        transition: border-color 0.15s, background 0.2s;
+      }
+      .tool-card:hover {
+        border-color: var(--border-2);
+      }
+      .tool-card.active-tool {
+        border-color: var(--em);
+        background: var(--em-dim);
+      }
+      .tool-card-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .tool-icon {
+        width: 28px;
+        height: 28px;
+        border-radius: 6px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 13px;
+        flex-shrink: 0;
+      }
+      .tool-icon-claude { background: rgba(14,165,233,0.15); }
+      .tool-icon-cursor { background: rgba(167,139,250,0.15); }
+      .tool-icon-all    { background: var(--em-dim); }
+      .tool-card-name {
+        font-size: 13px;
+        font-weight: 700;
+        text-transform: capitalize;
+      }
+      .tool-card-stats {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 4px 12px;
+      }
+      .tool-stat {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+      }
+      .tool-stat-val {
+        font-size: 14px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+      }
+      .tool-stat-lbl {
+        font-size: 10px;
+        color: var(--muted);
+      }
+
+      /* ── Source badge ──────────────────────────────────────────────────────── */
+      .source-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 1px 6px;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        white-space: nowrap;
+      }
+      .source-badge.claude {
+        background: rgba(14,165,233,0.15);
+        color: #0ea5e9;
+      }
+      .source-badge.cursor {
+        background: rgba(167,139,250,0.15);
+        color: #a78bfa;
+      }
+      .source-badge .sbdot {
+        width: 4px;
+        height: 4px;
+        border-radius: 50%;
+        background: currentColor;
+        flex-shrink: 0;
+      }
+
       /* ── Responsive ───────────────────────────────────────────────────────────── */
       @media (max-width: 1100px) {
         .kpi-grid {
@@ -855,6 +993,28 @@
         </div>
 
         <div class="sidebar-section">
+          <div class="sidebar-label">Tools</div>
+          <div class="tool-list">
+            <div
+              :class="['tool-item', { active: selectedSource === 'all' }]"
+              @click="selectedSource = 'all'"
+            >
+              <span class="tool-dot dot-all"></span>
+              <span class="tool-name">All Tools</span>
+            </div>
+            <div
+              v-for="src in (rawData ? rawData.all_sources : [])"
+              :key="src"
+              :class="['tool-item', { active: selectedSource === src }]"
+              @click="selectedSource = src"
+            >
+              <span :class="['tool-dot', 'dot-' + src]"></span>
+              <span class="tool-name">{{ src.charAt(0).toUpperCase() + src.slice(1) }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="sidebar-section">
           <div class="sidebar-label">Time Range</div>
           <div class="range-list">
             <button
@@ -934,6 +1094,69 @@
               <div class="page-title">Overview</div>
               <div class="page-sub">
                 {{ rangeLabel }} · {{ filteredSessions.length }} sessions
+                <template v-if="selectedSource !== 'all'"> · {{ selectedSource }}</template>
+              </div>
+            </div>
+
+            <!-- Tools summary -->
+            <div v-if="rawData && rawData.tools_summary && rawData.tools_summary.length > 0" class="tools-grid">
+              <div
+                :class="['tool-card', { 'active-tool': selectedSource === 'all' }]"
+                @click="selectedSource = 'all'"
+              >
+                <div class="tool-card-header">
+                  <div class="tool-icon tool-icon-all">◈</div>
+                  <span class="tool-card-name">All Tools</span>
+                </div>
+                <div class="tool-card-stats">
+                  <div class="tool-stat">
+                    <div class="tool-stat-val">{{ allToolsTotals.sessions.toLocaleString() }}</div>
+                    <div class="tool-stat-lbl">Sessions</div>
+                  </div>
+                  <div class="tool-stat">
+                    <div class="tool-stat-val">{{ fmt(allToolsTotals.turns) }}</div>
+                    <div class="tool-stat-lbl">Turns</div>
+                  </div>
+                  <div class="tool-stat">
+                    <div class="tool-stat-val val-green">{{ fmtCostBig(allToolsTotals.cost) }}</div>
+                    <div class="tool-stat-lbl">Est. Cost</div>
+                  </div>
+                  <div class="tool-stat">
+                    <div class="tool-stat-val">{{ fmt(allToolsTotals.input + allToolsTotals.output) }}</div>
+                    <div class="tool-stat-lbl">Tokens</div>
+                  </div>
+                </div>
+              </div>
+              <div
+                v-for="ts in rawData.tools_summary"
+                :key="ts.source"
+                :class="['tool-card', { 'active-tool': selectedSource === ts.source }]"
+                @click="selectedSource = ts.source"
+              >
+                <div class="tool-card-header">
+                  <div :class="['tool-icon', 'tool-icon-' + ts.source]">
+                    {{ ts.source === 'claude' ? '🤖' : ts.source === 'cursor' ? '✱' : '?' }}
+                  </div>
+                  <span class="tool-card-name">{{ ts.source.charAt(0).toUpperCase() + ts.source.slice(1) }}</span>
+                </div>
+                <div class="tool-card-stats">
+                  <div class="tool-stat">
+                    <div class="tool-stat-val">{{ ts.sessions.toLocaleString() }}</div>
+                    <div class="tool-stat-lbl">Sessions</div>
+                  </div>
+                  <div class="tool-stat">
+                    <div class="tool-stat-val">{{ fmt(ts.turns) }}</div>
+                    <div class="tool-stat-lbl">Turns</div>
+                  </div>
+                  <div class="tool-stat">
+                    <div class="tool-stat-val">{{ fmt(ts.input_tokens + ts.output_tokens) }}</div>
+                    <div class="tool-stat-lbl">Tokens</div>
+                  </div>
+                  <div class="tool-stat">
+                    <div class="tool-stat-val">{{ fmt(ts.cache_read) }}</div>
+                    <div class="tool-stat-lbl">Cache Read</div>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -1044,6 +1267,7 @@
                   <thead>
                     <tr>
                       <th>Session</th>
+                      <th>Tool</th>
                       <th>Project</th>
                       <th>Last Active</th>
                       <th>Duration</th>
@@ -1056,10 +1280,15 @@
                   </thead>
                   <tbody>
                     <tr v-if="!visibleSessions.length">
-                      <td colspan="9" class="empty">No sessions found</td>
+                      <td colspan="10" class="empty">No sessions found</td>
                     </tr>
                     <tr v-for="s in visibleSessions" :key="s.session_id">
                       <td class="mono dim">{{ s.session_id }}…</td>
+                      <td>
+                        <span :class="['source-badge', s.source || 'claude']">
+                          <span class="sbdot"></span>{{ s.source || 'claude' }}
+                        </span>
+                      </td>
                       <td>{{ s.project }}</td>
                       <td class="dim">{{ s.last }}</td>
                       <td class="dim">{{ s.duration_min }}m</td>
@@ -1260,6 +1489,7 @@
           const rawData = ref(null);
           const selectedModels = ref(new Set());
           const selectedRange = ref("30d");
+          const selectedSource = ref("all");
           const loading = ref(true);
           const error = ref("");
           const lastUpdated = ref("");
@@ -1338,7 +1568,8 @@
             if (!rawData.value) return [];
             const c = cutoff();
             return rawData.value.daily_by_model.filter(
-              (r) => selectedModels.value.has(r.model) && (!c || r.day >= c),
+              (r) => selectedModels.value.has(r.model) && (!c || r.day >= c) &&
+                     (selectedSource.value === "all" || r.source === selectedSource.value),
             );
           });
 
@@ -1368,7 +1599,8 @@
             const c = cutoff();
             return rawData.value.sessions_all.filter(
               (s) =>
-                selectedModels.value.has(s.model) && (!c || s.last_date >= c),
+                selectedModels.value.has(s.model) && (!c || s.last_date >= c) &&
+                (selectedSource.value === "all" || s.source === selectedSource.value),
             );
           });
 
@@ -1448,6 +1680,23 @@
                     m.cache_creation,
                   ),
                 0,
+              ),
+            };
+          });
+
+          // allToolsTotals aggregates across ALL sources (ignores selectedSource filter)
+          // so the tools summary cards always show the full picture.
+          const allToolsTotals = computed(() => {
+            if (!rawData.value) return { sessions: 0, turns: 0, input: 0, output: 0, cost: 0 };
+            const ts = rawData.value.tools_summary ?? [];
+            const sessionCount = rawData.value.sessions_all.length;
+            return {
+              sessions: sessionCount,
+              turns:  ts.reduce((s, t) => s + t.turns, 0),
+              input:  ts.reduce((s, t) => s + t.input_tokens, 0),
+              output: ts.reduce((s, t) => s + t.output_tokens, 0),
+              cost:   rawData.value.sessions_all.reduce(
+                (s, sess) => s + calcCost(sess.model, sess.input, sess.output, sess.cache_read, sess.cache_creation), 0
               ),
             };
           });
@@ -1724,7 +1973,7 @@
             }
           }
 
-          watch([selectedModels, selectedRange], () => {
+          watch([selectedModels, selectedRange, selectedSource], () => {
             if (rawData.value) renderCharts();
           });
           onMounted(() => {
@@ -1738,12 +1987,15 @@
             lastUpdated,
             sidebarOpen,
             isDark,
+            rawData,
             sortedModels,
             selectedModels,
             selectedRange,
+            selectedSource,
             RANGES,
             rangeLabel,
             totals,
+            allToolsTotals,
             byModel,
             visibleSessions,
             filteredSessions,

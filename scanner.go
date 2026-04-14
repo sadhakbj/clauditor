@@ -16,6 +16,9 @@ import (
 var projectsDir = filepath.Join(homeDir(), ".claude", "projects")
 var dbPath = filepath.Join(homeDir(), ".claude", "usage.db")
 
+const sourceClaude = "claude"
+const sourceCursor = "cursor"
+
 func homeDir() string {
 	h, err := os.UserHomeDir()
 	if err != nil {
@@ -31,6 +34,7 @@ func openDB(path string) (*sql.DB, error) {
 }
 
 func initDB(db *sql.DB) error {
+	// Step 1: create tables and indexes that don't depend on the source column.
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS sessions (
 			session_id              TEXT PRIMARY KEY,
@@ -43,7 +47,8 @@ func initDB(db *sql.DB) error {
 			total_cache_read        INTEGER DEFAULT 0,
 			total_cache_creation    INTEGER DEFAULT 0,
 			model                   TEXT,
-			turn_count              INTEGER DEFAULT 0
+			turn_count              INTEGER DEFAULT 0,
+			source                  TEXT DEFAULT 'claude'
 		);
 
 		CREATE TABLE IF NOT EXISTS turns (
@@ -56,7 +61,8 @@ func initDB(db *sql.DB) error {
 			cache_read_tokens       INTEGER DEFAULT 0,
 			cache_creation_tokens   INTEGER DEFAULT 0,
 			tool_name               TEXT,
-			cwd                     TEXT
+			cwd                     TEXT,
+			source                  TEXT DEFAULT 'claude'
 		);
 
 		CREATE TABLE IF NOT EXISTS processed_files (
@@ -69,7 +75,38 @@ func initDB(db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_turns_timestamp  ON turns(timestamp);
 		CREATE INDEX IF NOT EXISTS idx_sessions_first   ON sessions(first_timestamp);
 	`)
+	if err != nil {
+		return err
+	}
+
+	// Step 2: migrate existing databases (adds source column if absent).
+	if err := migrateDB(db); err != nil {
+		return err
+	}
+
+	// Step 3: create source-dependent indexes now that the column is guaranteed.
+	_, err = db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_turns_source    ON turns(source);
+		CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source);
+	`)
 	return err
+}
+
+// migrateDB adds new columns to existing databases that were created before
+// the multi-source feature was introduced.
+func migrateDB(db *sql.DB) error {
+	for _, stmt := range []string{
+		`ALTER TABLE sessions ADD COLUMN source TEXT DEFAULT 'claude'`,
+		`ALTER TABLE turns    ADD COLUMN source TEXT DEFAULT 'claude'`,
+	} {
+		_, err := db.Exec(stmt)
+		// SQLite returns "duplicate column name" if the column already exists;
+		// that is not an error we need to surface.
+		if err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			return err
+		}
+	}
+	return nil
 }
 
 // ── Data types ────────────────────────────────────────────────────────────────
@@ -81,18 +118,20 @@ type sessionMeta struct {
 	LastTimestamp  string
 	GitBranch      string
 	Model          string
+	Source         string
 }
 
 type turn struct {
-	SessionID          string
-	Timestamp          string
-	Model              string
-	InputTokens        int64
-	OutputTokens       int64
-	CacheReadTokens    int64
+	SessionID           string
+	Timestamp           string
+	Model               string
+	InputTokens         int64
+	OutputTokens        int64
+	CacheReadTokens     int64
 	CacheCreationTokens int64
-	ToolName           string
-	Cwd                string
+	ToolName            string
+	Cwd                 string
+	Source              string
 }
 
 type session struct {
@@ -145,7 +184,13 @@ func projectNameFromCwd(cwd string) string {
 
 // parseJSONLFile parses a JSONL file and returns session metadata and turns.
 func parseJSONLFile(filepath string) ([]sessionMeta, []turn, error) {
-	f, err := os.Open(filepath)
+	return parseJSONLFileWithSource(filepath, sourceClaude)
+}
+
+// parseJSONLFileWithSource parses a JSONL file and tags every record with the
+// provided source identifier.
+func parseJSONLFileWithSource(filePath, source string) ([]sessionMeta, []turn, error) {
+	f, err := os.Open(filePath)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -183,6 +228,7 @@ func parseJSONLFile(filepath string) ([]sessionMeta, []turn, error) {
 				FirstTimestamp: rec.Timestamp,
 				LastTimestamp:  rec.Timestamp,
 				GitBranch:      rec.GitBranch,
+				Source:         source,
 			}
 		} else {
 			if rec.Timestamp != "" {
@@ -235,6 +281,7 @@ func parseJSONLFile(filepath string) ([]sessionMeta, []turn, error) {
 			CacheCreationTokens: cc,
 			ToolName:            toolName,
 			Cwd:                 rec.Cwd,
+			Source:              source,
 		})
 	}
 
@@ -251,6 +298,12 @@ func parseJSONLFile(filepath string) ([]sessionMeta, []turn, error) {
 
 // parseJSONLFileFromLine parses only lines at index >= startLine (0-based).
 func parseJSONLFileFromLine(filePath string, startLine int) ([]turn, error) {
+	return parseJSONLFileFromLineWithSource(filePath, startLine, sourceClaude)
+}
+
+// parseJSONLFileFromLineWithSource parses lines starting at startLine and tags
+// each turn with the provided source.
+func parseJSONLFileFromLineWithSource(filePath string, startLine int, source string) ([]turn, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
 		return nil, err
@@ -310,6 +363,7 @@ func parseJSONLFileFromLine(filePath string, startLine int) ([]turn, error) {
 			CacheCreationTokens: cc,
 			ToolName:            toolName,
 			Cwd:                 rec.Cwd,
+			Source:              source,
 		})
 	}
 	return turns, sc.Err()
@@ -383,6 +437,10 @@ func aggregateSessions(metas []sessionMeta, turns []turn) []session {
 
 func upsertSessions(db *sql.DB, sessions []session) error {
 	for _, s := range sessions {
+		src := s.Source
+		if src == "" {
+			src = sourceClaude
+		}
 		var existing bool
 		err := db.QueryRow(
 			"SELECT 1 FROM sessions WHERE session_id = ?", s.SessionID,
@@ -393,11 +451,11 @@ func upsertSessions(db *sql.DB, sessions []session) error {
 				INSERT INTO sessions
 					(session_id, project_name, first_timestamp, last_timestamp,
 					 git_branch, total_input_tokens, total_output_tokens,
-					 total_cache_read, total_cache_creation, model, turn_count)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					 total_cache_read, total_cache_creation, model, turn_count, source)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				s.SessionID, s.ProjectName, s.FirstTimestamp, s.LastTimestamp,
 				s.GitBranch, s.TotalInputTokens, s.TotalOutputTokens,
-				s.TotalCacheRead, s.TotalCacheCreation, s.Model, s.TurnCount,
+				s.TotalCacheRead, s.TotalCacheCreation, s.Model, s.TurnCount, src,
 			)
 		} else if err == nil {
 			_, err = db.Exec(`
@@ -442,8 +500,8 @@ func insertTurns(db *sql.DB, turns []turn) error {
 	stmt, err := tx.Prepare(`
 		INSERT INTO turns
 			(session_id, timestamp, model, input_tokens, output_tokens,
-			 cache_read_tokens, cache_creation_tokens, tool_name, cwd)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+			 cache_read_tokens, cache_creation_tokens, tool_name, cwd, source)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -451,11 +509,15 @@ func insertTurns(db *sql.DB, turns []turn) error {
 	defer stmt.Close()
 
 	for _, t := range turns {
+		src := t.Source
+		if src == "" {
+			src = sourceClaude
+		}
 		_, err = stmt.Exec(
 			t.SessionID, t.Timestamp, nilIfEmpty(t.Model),
 			t.InputTokens, t.OutputTokens,
 			t.CacheReadTokens, t.CacheCreationTokens,
-			nilIfEmpty(t.ToolName), t.Cwd,
+			nilIfEmpty(t.ToolName), t.Cwd, src,
 		)
 		if err != nil {
 			tx.Rollback()

@@ -2,17 +2,17 @@
 
 Claude.ai shows you a usage bar. **Clauditor shows you everything else.**
 
-Which project burned through the most tokens this week? Which session cost $12 in one sitting? How much are you actually saving from prompt caching? Your Claude Code subscription gives you none of this — clauditor does.
+Which project burned through the most tokens this week? Which session cost $12 in one sitting? How much are you actually saving from prompt caching? Your Claude Code or Cursor subscription gives you none of this — clauditor does.
 
-It parses the JSONL transcripts that Claude Code writes locally, stores them in a SQLite database on your machine, and gives you a terminal UI and web dashboard to explore your usage. No API key. No account. Completely offline.
+It parses the JSONL transcripts that Claude Code writes locally (and conversation data from Cursor's storage), stores them in a SQLite database on your machine, and gives you a terminal UI and web dashboard to explore your usage. No API key. No account. Completely offline.
 
-Built for Claude Code **Pro and Max** subscribers who run it all day across multiple projects and want to know where their usage is actually going.
+Built for Claude Code **Pro and Max** subscribers and **Cursor** users who run AI tools all day across multiple projects and want to know where their usage is actually going.
 
 ---
 
-## What you get that Claude.ai doesn't
+## What you get that the tools don't show you
 
-| | Claude.ai | clauditor |
+| | Claude.ai / Cursor | clauditor |
 |---|---|---|
 | Usage bar (% of limit) | ✓ | ✓ |
 | Cost per session | ✗ | ✓ |
@@ -21,6 +21,7 @@ Built for Claude Code **Pro and Max** subscribers who run it all day across mult
 | Cache read vs creation savings | ✗ | ✓ |
 | API-equivalent cost estimates | ✗ | ✓ |
 | Model-by-model breakdown | ✗ | ✓ |
+| **Multi-tool dashboard (Claude + Cursor)** | ✗ | ✓ |
 | Works offline, no account | ✗ | ✓ |
 
 ---
@@ -70,7 +71,7 @@ clauditor [command] [flags]
 
 | Command | Description |
 |---------|-------------|
-| `scan` | Parse JSONL transcripts and write to the database |
+| `scan` | Parse JSONL transcripts (Claude) and Cursor data, write to the database |
 | `today` | Print today's usage broken down by model |
 | `stats` | Print all-time statistics |
 | `dashboard` | Scan + start a local web dashboard |
@@ -82,6 +83,15 @@ clauditor [command] [flags]
 |------|---------|-------------|
 | `--db` | `~/.claude/usage.db` | Path to the SQLite database |
 | `--dir` | `~/.claude/projects` | Path to Claude projects directory |
+| `--cursor-dir` | *(platform default)* | Path to Cursor user-data directory |
+
+The default Cursor data directory is:
+
+| OS | Default path |
+|----|-------------|
+| macOS | `~/Library/Application Support/Cursor` |
+| Linux | `~/.config/Cursor` (or `$XDG_CONFIG_HOME/Cursor`) |
+| Windows | `%APPDATA%\Cursor` |
 
 ### Dashboard flags
 
@@ -96,13 +106,14 @@ clauditor [command] [flags]
 
 Runs at `http://localhost:8080`. Shows:
 
+- **Tools summary**: cards for each detected tool (Claude, Cursor) with sessions, turns, tokens and cost at a glance
 - KPIs: sessions, turns, input/output tokens, cache usage, estimated cost
 - Daily token usage (stacked: input / output / cache read / cache creation)
 - Breakdown by model
 - Top projects by cost
-- Session table
+- Session table (with Tool and Model columns)
 
-Filter by model and date range (today / 7d / 30d / 90d / all time). Refreshes automatically every 60 seconds — no page reload.
+Filter by **tool** (All / Claude / Cursor), **model**, and **date range** (today / 7d / 30d / 90d / all time). Refreshes automatically every 60 seconds — no page reload.
 
 ![Web dashboard](docs/images/web-dashboard.png)
 
@@ -131,7 +142,15 @@ clauditor tui
 
 ## How it works
 
-Claude Code writes every conversation as a JSONL file under `~/.claude/projects/`. Each line is a turn — it includes the model used, input tokens, output tokens, and cache token counts. Clauditor reads those files, aggregates them into a local SQLite database, and renders the results.
+### Claude Code
+
+Claude Code writes every conversation as a JSONL file under `~/.claude/projects/`. Each line is a turn — it includes the model used, input tokens, output tokens, and cache token counts.
+
+### Cursor
+
+Cursor stores conversation data in SQLite state databases under its user-data directory (`User/workspaceStorage/*/state.vscdb` and `User/globalStorage/state.vscdb`). Clauditor reads the AI chat conversation records from those databases and normalises them into the same turn/session structure.
+
+Both sources are tagged with a `source` field (`claude` or `cursor`) in the shared SQLite database so they can be viewed together or filtered independently.
 
 Nothing leaves your machine.
 
@@ -146,6 +165,8 @@ Estimated using Anthropic API pricing (April 2026). Your subscription cost is di
 | Opus 4.x | $6.15/M | $30.75/M | $7.69/M | $0.61/M |
 | Sonnet 4.x | $3.69/M | $18.45/M | $4.61/M | $0.37/M |
 | Haiku 4.x | $1.23/M | $6.15/M | $1.54/M | $0.12/M |
+
+Cursor sessions that use non-Claude models (e.g. GPT-4o) are recorded but cost is shown as `—` since no pricing data is configured for those models.
 
 ---
 
