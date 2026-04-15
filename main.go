@@ -67,6 +67,7 @@ var tuiCmd = &cobra.Command{
 func init() {
 	rootCmd.PersistentFlags().StringVar(&dbPath, "db", dbPath, "Path to SQLite database")
 	rootCmd.PersistentFlags().StringVar(&projectsDir, "dir", projectsDir, "Path to Claude projects directory")
+	rootCmd.PersistentFlags().StringVar(&codexDir, "codex-dir", codexDir, "Path to Codex CLI sessions directory (default: $CODEX_HOME/sessions or ~/.codex/sessions)")
 
 	dashboardCmd.Flags().IntVar(&flagPort, "port", 8080, "Port for the dashboard server")
 	dashboardCmd.Flags().BoolVar(&flagNoBrowser, "no-browser", false, "Don't open browser automatically")

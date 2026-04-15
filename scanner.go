@@ -43,7 +43,8 @@ func initDB(db *sql.DB) error {
 			total_cache_read        INTEGER DEFAULT 0,
 			total_cache_creation    INTEGER DEFAULT 0,
 			model                   TEXT,
-			turn_count              INTEGER DEFAULT 0
+			turn_count              INTEGER DEFAULT 0,
+			tool                    TEXT NOT NULL DEFAULT 'claude_code'
 		);
 
 		CREATE TABLE IF NOT EXISTS turns (
@@ -56,7 +57,8 @@ func initDB(db *sql.DB) error {
 			cache_read_tokens       INTEGER DEFAULT 0,
 			cache_creation_tokens   INTEGER DEFAULT 0,
 			tool_name               TEXT,
-			cwd                     TEXT
+			cwd                     TEXT,
+			tool                    TEXT NOT NULL DEFAULT 'claude_code'
 		);
 
 		CREATE TABLE IF NOT EXISTS processed_files (
@@ -69,7 +71,11 @@ func initDB(db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_turns_timestamp  ON turns(timestamp);
 		CREATE INDEX IF NOT EXISTS idx_sessions_first   ON sessions(first_timestamp);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // ── Data types ────────────────────────────────────────────────────────────────
@@ -81,18 +87,20 @@ type sessionMeta struct {
 	LastTimestamp  string
 	GitBranch      string
 	Model          string
+	Tool           string // "claude_code" or "codex"
 }
 
 type turn struct {
-	SessionID          string
-	Timestamp          string
-	Model              string
-	InputTokens        int64
-	OutputTokens       int64
-	CacheReadTokens    int64
+	SessionID           string
+	Timestamp           string
+	Model               string
+	InputTokens         int64
+	OutputTokens        int64
+	CacheReadTokens     int64
 	CacheCreationTokens int64
-	ToolName           string
-	Cwd                string
+	ToolName            string
+	Cwd                 string
+	Tool                string // "claude_code" or "codex"
 }
 
 type session struct {
@@ -183,6 +191,7 @@ func parseJSONLFile(filepath string) ([]sessionMeta, []turn, error) {
 				FirstTimestamp: rec.Timestamp,
 				LastTimestamp:  rec.Timestamp,
 				GitBranch:      rec.GitBranch,
+				Tool:           "claude_code",
 			}
 		} else {
 			if rec.Timestamp != "" {
@@ -235,6 +244,7 @@ func parseJSONLFile(filepath string) ([]sessionMeta, []turn, error) {
 			CacheCreationTokens: cc,
 			ToolName:            toolName,
 			Cwd:                 rec.Cwd,
+			Tool:                "claude_code",
 		})
 	}
 
@@ -310,6 +320,7 @@ func parseJSONLFileFromLine(filePath string, startLine int) ([]turn, error) {
 			CacheCreationTokens: cc,
 			ToolName:            toolName,
 			Cwd:                 rec.Cwd,
+			Tool:                "claude_code",
 		})
 	}
 	return turns, sc.Err()
@@ -393,11 +404,12 @@ func upsertSessions(db *sql.DB, sessions []session) error {
 				INSERT INTO sessions
 					(session_id, project_name, first_timestamp, last_timestamp,
 					 git_branch, total_input_tokens, total_output_tokens,
-					 total_cache_read, total_cache_creation, model, turn_count)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					 total_cache_read, total_cache_creation, model, turn_count, tool)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				s.SessionID, s.ProjectName, s.FirstTimestamp, s.LastTimestamp,
 				s.GitBranch, s.TotalInputTokens, s.TotalOutputTokens,
 				s.TotalCacheRead, s.TotalCacheCreation, s.Model, s.TurnCount,
+				toolOrDefault(s.Tool),
 			)
 		} else if err == nil {
 			_, err = db.Exec(`
@@ -431,6 +443,13 @@ func nilIfEmpty(s string) interface{} {
 	return s
 }
 
+func toolOrDefault(t string) string {
+	if t == "" {
+		return "claude_code"
+	}
+	return t
+}
+
 func insertTurns(db *sql.DB, turns []turn) error {
 	if len(turns) == 0 {
 		return nil
@@ -442,8 +461,8 @@ func insertTurns(db *sql.DB, turns []turn) error {
 	stmt, err := tx.Prepare(`
 		INSERT INTO turns
 			(session_id, timestamp, model, input_tokens, output_tokens,
-			 cache_read_tokens, cache_creation_tokens, tool_name, cwd)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+			 cache_read_tokens, cache_creation_tokens, tool_name, cwd, tool)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -455,7 +474,7 @@ func insertTurns(db *sql.DB, turns []turn) error {
 			t.SessionID, t.Timestamp, nilIfEmpty(t.Model),
 			t.InputTokens, t.OutputTokens,
 			t.CacheReadTokens, t.CacheCreationTokens,
-			nilIfEmpty(t.ToolName), t.Cwd,
+			nilIfEmpty(t.ToolName), t.Cwd, toolOrDefault(t.Tool),
 		)
 		if err != nil {
 			tx.Rollback()

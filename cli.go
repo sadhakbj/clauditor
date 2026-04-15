@@ -54,12 +54,19 @@ type modelPricing struct {
 }
 
 var pricing = map[string]modelPricing{
+	// Anthropic — Claude models ($ per million tokens: Input, Output, CacheWrite, CacheRead)
 	"claude-opus-4-6":   {6.15, 30.75, 7.69, 0.61},
 	"claude-opus-4-5":   {6.15, 30.75, 7.69, 0.61},
 	"claude-sonnet-4-6": {3.69, 18.45, 4.61, 0.37},
 	"claude-sonnet-4-5": {3.69, 18.45, 4.61, 0.37},
 	"claude-haiku-4-5":  {1.23, 6.15, 1.54, 0.12},
 	"claude-haiku-4-6":  {1.23, 6.15, 1.54, 0.12},
+
+	// OpenAI — Codex / GPT models (Input = non-cached, CacheRead = cached, CacheWrite = 0)
+	// gpt-5-codex: $1.25/M non-cached input, $0.125/M cached input, $10.00/M output
+	"gpt-5-codex": {1.25, 10.00, 0, 0.125},
+	"gpt-4o":      {2.50, 10.00, 0, 1.25},
+	"gpt-4o-mini": {0.15, 0.60, 0, 0.075},
 }
 
 var defaultPricing = modelPricing{3.69, 18.45, 4.61, 0.37}
@@ -86,6 +93,15 @@ func getPricing(model string) (modelPricing, bool) {
 	if strings.Contains(ml, "haiku") {
 		return pricing["claude-haiku-4-5"], true
 	}
+	if strings.Contains(ml, "gpt-5") || strings.Contains(ml, "codex") {
+		return pricing["gpt-5-codex"], true
+	}
+	if strings.Contains(ml, "gpt-4o-mini") {
+		return pricing["gpt-4o-mini"], true
+	}
+	if strings.Contains(ml, "gpt-4o") || strings.Contains(ml, "gpt-4") {
+		return pricing["gpt-4o"], true
+	}
 	return defaultPricing, false
 }
 
@@ -93,7 +109,8 @@ func isBillable(model string) bool {
 	ml := strings.ToLower(model)
 	return strings.Contains(ml, "opus") ||
 		strings.Contains(ml, "sonnet") ||
-		strings.Contains(ml, "haiku")
+		strings.Contains(ml, "haiku") ||
+		strings.HasPrefix(ml, "gpt-")
 }
 
 func calcCost(model string, inp, out, cacheRead, cacheCreation int64) float64 {
@@ -151,6 +168,12 @@ func cmdScan() {
 	cHeader.Printf("Scanning %s ...\n", projectsDir)
 	if _, err := scan(projectsDir, dbPath, true); err != nil {
 		color.Red("Scan error: %v", err)
+		os.Exit(1)
+	}
+
+	cHeader.Printf("Scanning Codex sessions %s ...\n", codexDir)
+	if _, err := scanCodex(codexDir, dbPath, true); err != nil {
+		color.Red("Codex scan error: %v", err)
 		os.Exit(1)
 	}
 }

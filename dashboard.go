@@ -23,6 +23,7 @@ var indexHTML string
 type dailyModelRow struct {
 	Day           string `json:"day"`
 	Model         string `json:"model"`
+	Tool          string `json:"tool"`
 	Input         int64  `json:"input"`
 	Output        int64  `json:"output"`
 	CacheRead     int64  `json:"cache_read"`
@@ -37,6 +38,7 @@ type sessionRow struct {
 	LastDate      string  `json:"last_date"`
 	DurationMin   float64 `json:"duration_min"`
 	Model         string  `json:"model"`
+	Tool          string  `json:"tool"`
 	Turns         int64   `json:"turns"`
 	Input         int64   `json:"input"`
 	Output        int64   `json:"output"`
@@ -44,12 +46,24 @@ type sessionRow struct {
 	CacheCreation int64   `json:"cache_creation"`
 }
 
+type toolSummaryRow struct {
+	Tool          string `json:"tool"`
+	Sessions      int64  `json:"sessions"`
+	Turns         int64  `json:"turns"`
+	Input         int64  `json:"input"`
+	Output        int64  `json:"output"`
+	CacheRead     int64  `json:"cache_read"`
+	CacheCreation int64  `json:"cache_creation"`
+}
+
 type dashboardData struct {
-	Error        string          `json:"error,omitempty"`
-	AllModels    []string        `json:"all_models"`
-	DailyByModel []dailyModelRow `json:"daily_by_model"`
-	SessionsAll  []sessionRow    `json:"sessions_all"`
-	GeneratedAt  string          `json:"generated_at"`
+	Error        string           `json:"error,omitempty"`
+	AllModels    []string         `json:"all_models"`
+	AllTools     []string         `json:"all_tools"`
+	DailyByModel []dailyModelRow  `json:"daily_by_model"`
+	SessionsAll  []sessionRow     `json:"sessions_all"`
+	ToolSummary  []toolSummaryRow `json:"tool_summary"`
+	GeneratedAt  string           `json:"generated_at"`
 }
 
 func getDashboardData() dashboardData {
@@ -74,35 +88,74 @@ func getDashboardData() dashboardData {
 		allModels = append(allModels, m)
 	}
 
-	// Daily per-model
+	// All tools
+	toolRows, _ := db.Query(`
+		SELECT COALESCE(tool, 'claude_code') as tool
+		FROM turns
+		GROUP BY tool
+		ORDER BY tool`)
+	defer toolRows.Close()
+
+	var allTools []string
+	for toolRows.Next() {
+		var t string
+		toolRows.Scan(&t)
+		allTools = append(allTools, t)
+	}
+
+	// Per-tool summary
+	tsrows, _ := db.Query(`
+		SELECT
+			COALESCE(tool, 'claude_code') as tool,
+			COUNT(DISTINCT session_id)    as sessions,
+			COUNT(*)                      as turns,
+			SUM(input_tokens)             as input,
+			SUM(output_tokens)            as output,
+			SUM(cache_read_tokens)        as cache_read,
+			SUM(cache_creation_tokens)    as cache_creation
+		FROM turns
+		GROUP BY tool
+		ORDER BY tool`)
+	defer tsrows.Close()
+
+	var toolSummary []toolSummaryRow
+	for tsrows.Next() {
+		var r toolSummaryRow
+		tsrows.Scan(&r.Tool, &r.Sessions, &r.Turns, &r.Input, &r.Output, &r.CacheRead, &r.CacheCreation)
+		toolSummary = append(toolSummary, r)
+	}
+
+	// Daily per-model (includes tool for frontend filtering)
 	drows, _ := db.Query(`
 		SELECT
-			substr(timestamp, 1, 10)    as day,
-			COALESCE(model, 'unknown')  as model,
-			SUM(input_tokens)           as input,
-			SUM(output_tokens)          as output,
-			SUM(cache_read_tokens)      as cache_read,
-			SUM(cache_creation_tokens)  as cache_creation,
-			COUNT(*)                    as turns
+			substr(timestamp, 1, 10)         as day,
+			COALESCE(model, 'unknown')        as model,
+			COALESCE(tool, 'claude_code')     as tool,
+			SUM(input_tokens)                 as input,
+			SUM(output_tokens)                as output,
+			SUM(cache_read_tokens)            as cache_read,
+			SUM(cache_creation_tokens)        as cache_creation,
+			COUNT(*)                          as turns
 		FROM turns
-		GROUP BY day, model
+		GROUP BY day, model, tool
 		ORDER BY day, model`)
 	defer drows.Close()
 
 	var dailyByModel []dailyModelRow
 	for drows.Next() {
 		var r dailyModelRow
-		drows.Scan(&r.Day, &r.Model, &r.Input, &r.Output, &r.CacheRead, &r.CacheCreation, &r.Turns)
+		drows.Scan(&r.Day, &r.Model, &r.Tool, &r.Input, &r.Output, &r.CacheRead, &r.CacheCreation, &r.Turns)
 		dailyByModel = append(dailyByModel, r)
 	}
 
-	// All sessions
+	// All sessions (includes tool)
 	srows, err := db.Query(`
 		SELECT
 			session_id, COALESCE(project_name,'unknown'), first_timestamp, last_timestamp,
 			total_input_tokens, total_output_tokens,
 			total_cache_read, total_cache_creation,
-			COALESCE(model,'unknown'), turn_count
+			COALESCE(model,'unknown'), turn_count,
+			COALESCE(tool,'claude_code')
 		FROM sessions
 		ORDER BY last_timestamp DESC`)
 	if err != nil {
@@ -115,10 +168,10 @@ func getDashboardData() dashboardData {
 		var (
 			sid, project, first, last string
 			inp, out, cr, cc          int64
-			model                     string
+			model, tool               string
 			turns                     int64
 		)
-		srows.Scan(&sid, &project, &first, &last, &inp, &out, &cr, &cc, &model, &turns)
+		srows.Scan(&sid, &project, &first, &last, &inp, &out, &cr, &cc, &model, &turns, &tool)
 
 		durationMin := sessionDurationMin(first, last)
 		lastShort := last
@@ -142,6 +195,7 @@ func getDashboardData() dashboardData {
 			LastDate:      lastDate,
 			DurationMin:   durationMin,
 			Model:         model,
+			Tool:          tool,
 			Turns:         turns,
 			Input:         inp,
 			Output:        out,
@@ -152,8 +206,10 @@ func getDashboardData() dashboardData {
 
 	return dashboardData{
 		AllModels:    allModels,
+		AllTools:     allTools,
 		DailyByModel: dailyByModel,
 		SessionsAll:  sessionsAll,
+		ToolSummary:  toolSummary,
 		GeneratedAt:  time.Now().Format("2006-01-02 15:04:05"),
 	}
 }
@@ -212,7 +268,8 @@ func newDashboardMux() *http.ServeMux {
 	})
 
 	mux.HandleFunc("/api/data", func(w http.ResponseWriter, r *http.Request) {
-		scan(projectsDir, dbPath, false) // rescan on every poll so data stays fresh
+		scan(projectsDir, dbPath, false)      // rescan Claude transcripts
+		scanCodex(codexDir, dbPath, false)    // rescan Codex sessions
 		data := getDashboardData()
 		body, err := json.Marshal(data)
 		if err != nil {
