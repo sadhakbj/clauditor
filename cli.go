@@ -54,15 +54,23 @@ type modelPricing struct {
 }
 
 var pricing = map[string]modelPricing{
-	"claude-opus-4-6":   {6.15, 30.75, 7.69, 0.61},
-	"claude-opus-4-5":   {6.15, 30.75, 7.69, 0.61},
-	"claude-sonnet-4-6": {3.69, 18.45, 4.61, 0.37},
-	"claude-sonnet-4-5": {3.69, 18.45, 4.61, 0.37},
-	"claude-haiku-4-5":  {1.23, 6.15, 1.54, 0.12},
-	"claude-haiku-4-6":  {1.23, 6.15, 1.54, 0.12},
+	// Anthropic — Claude models ($ per million tokens: Input, Output, CacheWrite, CacheRead)
+	// Source: https://www.anthropic.com/pricing (April 2026)
+	// CacheWrite = 5-min ephemeral cache price (1.25x input); 1-hour = 2x input but indistinguishable at billing
+	"claude-opus-4-6":   {15.00, 75.00, 18.75, 1.50},
+	"claude-opus-4-5":   {15.00, 75.00, 18.75, 1.50},
+	"claude-sonnet-4-6": {3.00, 15.00, 3.75, 0.30},
+	"claude-sonnet-4-5": {3.00, 15.00, 3.75, 0.30},
+	"claude-haiku-4-5":  {1.00, 5.00, 1.25, 0.10},
+	"claude-haiku-4-6":  {1.00, 5.00, 1.25, 0.10},
+
+	// OpenAI — Codex / GPT models (Input = non-cached, CacheRead = cached, CacheWrite = 0)
+	"gpt-5-codex": {1.25, 10.00, 0, 0.125},
+	"gpt-4o":      {2.50, 10.00, 0, 1.25},
+	"gpt-4o-mini": {0.15, 0.60, 0, 0.075},
 }
 
-var defaultPricing = modelPricing{3.69, 18.45, 4.61, 0.37}
+var defaultPricing = modelPricing{3.00, 15.00, 3.75, 0.30}
 
 func getPricing(model string) (modelPricing, bool) {
 	if model == "" {
@@ -86,6 +94,15 @@ func getPricing(model string) (modelPricing, bool) {
 	if strings.Contains(ml, "haiku") {
 		return pricing["claude-haiku-4-5"], true
 	}
+	if strings.Contains(ml, "gpt-5") || strings.Contains(ml, "codex") {
+		return pricing["gpt-5-codex"], true
+	}
+	if strings.Contains(ml, "gpt-4o-mini") {
+		return pricing["gpt-4o-mini"], true
+	}
+	if strings.Contains(ml, "gpt-4o") || strings.Contains(ml, "gpt-4") {
+		return pricing["gpt-4o"], true
+	}
 	return defaultPricing, false
 }
 
@@ -93,7 +110,8 @@ func isBillable(model string) bool {
 	ml := strings.ToLower(model)
 	return strings.Contains(ml, "opus") ||
 		strings.Contains(ml, "sonnet") ||
-		strings.Contains(ml, "haiku")
+		strings.Contains(ml, "haiku") ||
+		strings.HasPrefix(ml, "gpt-")
 }
 
 func calcCost(model string, inp, out, cacheRead, cacheCreation int64) float64 {
@@ -147,10 +165,16 @@ func requireDB() *sql.DB {
 
 // ── Commands ──────────────────────────────────────────────────────────────────
 
-func cmdScan() {
+func cmdScan(since string) {
 	cHeader.Printf("Scanning %s ...\n", projectsDir)
-	if _, err := scan(projectsDir, dbPath, true); err != nil {
+	if _, err := scan(projectsDir, dbPath, true, since); err != nil {
 		color.Red("Scan error: %v", err)
+		os.Exit(1)
+	}
+
+	cHeader.Printf("Scanning Codex sessions %s ...\n", codexDir)
+	if _, err := scanCodex(codexDir, dbPath, true); err != nil {
+		color.Red("Codex scan error: %v", err)
 		os.Exit(1)
 	}
 }
@@ -447,7 +471,7 @@ func cmdStats() {
 
 func cmdDashboard(port int, noBrowser bool) {
 	cHeader.Println("Running scan first...")
-	cmdScan()
+	cmdScan("")
 
 	cHeader.Println("\nStarting dashboard server...")
 	serveDashboard(port, noBrowser)

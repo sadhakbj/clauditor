@@ -10,3 +10,6 @@ clauditor.exe
 
 # GoReleaser output
 dist/
+
+# Frontend dependencies
+frontend/node_modules/

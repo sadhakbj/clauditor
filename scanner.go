@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -43,7 +44,8 @@ func initDB(db *sql.DB) error {
 			total_cache_read        INTEGER DEFAULT 0,
 			total_cache_creation    INTEGER DEFAULT 0,
 			model                   TEXT,
-			turn_count              INTEGER DEFAULT 0
+			turn_count              INTEGER DEFAULT 0,
+			tool                    TEXT NOT NULL DEFAULT 'claude_code'
 		);
 
 		CREATE TABLE IF NOT EXISTS turns (
@@ -56,7 +58,8 @@ func initDB(db *sql.DB) error {
 			cache_read_tokens       INTEGER DEFAULT 0,
 			cache_creation_tokens   INTEGER DEFAULT 0,
 			tool_name               TEXT,
-			cwd                     TEXT
+			cwd                     TEXT,
+			tool                    TEXT NOT NULL DEFAULT 'claude_code'
 		);
 
 		CREATE TABLE IF NOT EXISTS processed_files (
@@ -69,7 +72,11 @@ func initDB(db *sql.DB) error {
 		CREATE INDEX IF NOT EXISTS idx_turns_timestamp  ON turns(timestamp);
 		CREATE INDEX IF NOT EXISTS idx_sessions_first   ON sessions(first_timestamp);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // ── Data types ────────────────────────────────────────────────────────────────
@@ -81,18 +88,20 @@ type sessionMeta struct {
 	LastTimestamp  string
 	GitBranch      string
 	Model          string
+	Tool           string // "claude_code" or "codex"
 }
 
 type turn struct {
-	SessionID          string
-	Timestamp          string
-	Model              string
-	InputTokens        int64
-	OutputTokens       int64
-	CacheReadTokens    int64
+	SessionID           string
+	Timestamp           string
+	Model               string
+	InputTokens         int64
+	OutputTokens        int64
+	CacheReadTokens     int64
 	CacheCreationTokens int64
-	ToolName           string
-	Cwd                string
+	ToolName            string
+	Cwd                 string
+	Tool                string // "claude_code" or "codex"
 }
 
 type session struct {
@@ -144,7 +153,8 @@ func projectNameFromCwd(cwd string) string {
 }
 
 // parseJSONLFile parses a JSONL file and returns session metadata and turns.
-func parseJSONLFile(filepath string) ([]sessionMeta, []turn, error) {
+// sinceDate, if non-empty (format "2006-01-02"), skips turns before that date.
+func parseJSONLFile(filepath, sinceDate string) ([]sessionMeta, []turn, error) {
 	f, err := os.Open(filepath)
 	if err != nil {
 		return nil, nil, err
@@ -183,6 +193,7 @@ func parseJSONLFile(filepath string) ([]sessionMeta, []turn, error) {
 				FirstTimestamp: rec.Timestamp,
 				LastTimestamp:  rec.Timestamp,
 				GitBranch:      rec.GitBranch,
+				Tool:           "claude_code",
 			}
 		} else {
 			if rec.Timestamp != "" {
@@ -200,6 +211,15 @@ func parseJSONLFile(filepath string) ([]sessionMeta, []turn, error) {
 
 		if rec.Type != "assistant" {
 			continue
+		}
+
+		// Skip turns before sinceDate (compare in local time — JSONL timestamps are UTC)
+		if sinceDate != "" {
+			if t, err := time.Parse(time.RFC3339Nano, rec.Timestamp); err == nil {
+				if t.Local().Format("2006-01-02") < sinceDate {
+					continue
+				}
+			}
 		}
 
 		u := rec.Message.Usage
@@ -235,6 +255,7 @@ func parseJSONLFile(filepath string) ([]sessionMeta, []turn, error) {
 			CacheCreationTokens: cc,
 			ToolName:            toolName,
 			Cwd:                 rec.Cwd,
+			Tool:                "claude_code",
 		})
 	}
 
@@ -250,7 +271,8 @@ func parseJSONLFile(filepath string) ([]sessionMeta, []turn, error) {
 }
 
 // parseJSONLFileFromLine parses only lines at index >= startLine (0-based).
-func parseJSONLFileFromLine(filePath string, startLine int) ([]turn, error) {
+// sinceDate, if non-empty, skips turns before that date.
+func parseJSONLFileFromLine(filePath string, startLine int, sinceDate string) ([]turn, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
 		return nil, err
@@ -282,6 +304,14 @@ func parseJSONLFileFromLine(filePath string, startLine int) ([]turn, error) {
 			continue
 		}
 
+		if sinceDate != "" {
+			if t, err := time.Parse(time.RFC3339Nano, rec.Timestamp); err == nil {
+				if t.Local().Format("2006-01-02") < sinceDate {
+					continue
+				}
+			}
+		}
+
 		u := rec.Message.Usage
 		inp := u.InputTokens
 		out := u.OutputTokens
@@ -310,6 +340,7 @@ func parseJSONLFileFromLine(filePath string, startLine int) ([]turn, error) {
 			CacheCreationTokens: cc,
 			ToolName:            toolName,
 			Cwd:                 rec.Cwd,
+			Tool:                "claude_code",
 		})
 	}
 	return turns, sc.Err()
@@ -393,11 +424,12 @@ func upsertSessions(db *sql.DB, sessions []session) error {
 				INSERT INTO sessions
 					(session_id, project_name, first_timestamp, last_timestamp,
 					 git_branch, total_input_tokens, total_output_tokens,
-					 total_cache_read, total_cache_creation, model, turn_count)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					 total_cache_read, total_cache_creation, model, turn_count, tool)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				s.SessionID, s.ProjectName, s.FirstTimestamp, s.LastTimestamp,
 				s.GitBranch, s.TotalInputTokens, s.TotalOutputTokens,
 				s.TotalCacheRead, s.TotalCacheCreation, s.Model, s.TurnCount,
+				toolOrDefault(s.Tool),
 			)
 		} else if err == nil {
 			_, err = db.Exec(`
@@ -431,6 +463,13 @@ func nilIfEmpty(s string) interface{} {
 	return s
 }
 
+func toolOrDefault(t string) string {
+	if t == "" {
+		return "claude_code"
+	}
+	return t
+}
+
 func insertTurns(db *sql.DB, turns []turn) error {
 	if len(turns) == 0 {
 		return nil
@@ -442,8 +481,8 @@ func insertTurns(db *sql.DB, turns []turn) error {
 	stmt, err := tx.Prepare(`
 		INSERT INTO turns
 			(session_id, timestamp, model, input_tokens, output_tokens,
-			 cache_read_tokens, cache_creation_tokens, tool_name, cwd)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+			 cache_read_tokens, cache_creation_tokens, tool_name, cwd, tool)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -455,7 +494,7 @@ func insertTurns(db *sql.DB, turns []turn) error {
 			t.SessionID, t.Timestamp, nilIfEmpty(t.Model),
 			t.InputTokens, t.OutputTokens,
 			t.CacheReadTokens, t.CacheCreationTokens,
-			nilIfEmpty(t.ToolName), t.Cwd,
+			nilIfEmpty(t.ToolName), t.Cwd, toolOrDefault(t.Tool),
 		)
 		if err != nil {
 			tx.Rollback()
@@ -475,7 +514,11 @@ type scanResult struct {
 	SessionsSeen int
 }
 
-func scan(projDir, dbP string, verbose bool) (scanResult, error) {
+func scan(projDir, dbP string, verbose bool, sinceDate ...string) (scanResult, error) {
+	since := ""
+	if len(sinceDate) > 0 {
+		since = sinceDate[0]
+	}
 	db, err := openDB(dbP)
 	if err != nil {
 		return scanResult{}, err
@@ -538,7 +581,7 @@ func scan(projDir, dbP string, verbose bool) (scanResult, error) {
 		var sessions []session
 
 		if isNew {
-			metas, turns, err := parseJSONLFile(filePath)
+			metas, turns, err := parseJSONLFile(filePath, since)
 			if err != nil {
 				fmt.Printf("  Warning: error reading %s: %v\n", filePath, err)
 				continue
@@ -561,14 +604,14 @@ func scan(projDir, dbP string, verbose bool) (scanResult, error) {
 			}
 
 			// Get full session metadata from full parse (for timestamps)
-			metas, _, err := parseJSONLFile(filePath)
+			metas, _, err := parseJSONLFile(filePath, since)
 			if err != nil {
 				fmt.Printf("  Warning: error reading %s: %v\n", filePath, err)
 				continue
 			}
 
 			// Parse only new lines for turns
-			newTurns, err = parseJSONLFileFromLine(filePath, oldLines)
+			newTurns, err = parseJSONLFileFromLine(filePath, oldLines, since)
 			if err != nil {
 				fmt.Printf("  Warning: %v\n", err)
 			}

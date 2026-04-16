@@ -4,6 +4,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -11,6 +12,7 @@ import (
 var (
 	flagPort      int
 	flagNoBrowser bool
+	flagSince     string
 )
 
 var rootCmd = &cobra.Command{
@@ -23,7 +25,11 @@ var scanCmd = &cobra.Command{
 	Use:   "scan",
 	Short: "Scan JSONL files and update the database",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cmdScan()
+		since := flagSince
+		if since == "today" {
+			since = time.Now().Format("2006-01-02")
+		}
+		cmdScan(since)
 		return nil
 	},
 }
@@ -67,6 +73,9 @@ var tuiCmd = &cobra.Command{
 func init() {
 	rootCmd.PersistentFlags().StringVar(&dbPath, "db", dbPath, "Path to SQLite database")
 	rootCmd.PersistentFlags().StringVar(&projectsDir, "dir", projectsDir, "Path to Claude projects directory")
+	rootCmd.PersistentFlags().StringVar(&codexDir, "codex-dir", codexDir, "Path to Codex CLI sessions directory (default: $CODEX_HOME/sessions or ~/.codex/sessions)")
+
+	scanCmd.Flags().StringVar(&flagSince, "since", "", "Only ingest turns on or after this date (YYYY-MM-DD, or 'today')")
 
 	dashboardCmd.Flags().IntVar(&flagPort, "port", 8080, "Port for the dashboard server")
 	dashboardCmd.Flags().BoolVar(&flagNoBrowser, "no-browser", false, "Don't open browser automatically")
