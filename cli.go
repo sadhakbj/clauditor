@@ -55,21 +55,22 @@ type modelPricing struct {
 
 var pricing = map[string]modelPricing{
 	// Anthropic — Claude models ($ per million tokens: Input, Output, CacheWrite, CacheRead)
-	"claude-opus-4-6":   {6.15, 30.75, 7.69, 0.61},
-	"claude-opus-4-5":   {6.15, 30.75, 7.69, 0.61},
-	"claude-sonnet-4-6": {3.69, 18.45, 4.61, 0.37},
-	"claude-sonnet-4-5": {3.69, 18.45, 4.61, 0.37},
-	"claude-haiku-4-5":  {1.23, 6.15, 1.54, 0.12},
-	"claude-haiku-4-6":  {1.23, 6.15, 1.54, 0.12},
+	// Source: https://www.anthropic.com/pricing (April 2026)
+	// CacheWrite = 5-min ephemeral cache price (1.25x input); 1-hour = 2x input but indistinguishable at billing
+	"claude-opus-4-6":   {15.00, 75.00, 18.75, 1.50},
+	"claude-opus-4-5":   {15.00, 75.00, 18.75, 1.50},
+	"claude-sonnet-4-6": {3.00, 15.00, 3.75, 0.30},
+	"claude-sonnet-4-5": {3.00, 15.00, 3.75, 0.30},
+	"claude-haiku-4-5":  {1.00, 5.00, 1.25, 0.10},
+	"claude-haiku-4-6":  {1.00, 5.00, 1.25, 0.10},
 
 	// OpenAI — Codex / GPT models (Input = non-cached, CacheRead = cached, CacheWrite = 0)
-	// gpt-5-codex: $1.25/M non-cached input, $0.125/M cached input, $10.00/M output
 	"gpt-5-codex": {1.25, 10.00, 0, 0.125},
 	"gpt-4o":      {2.50, 10.00, 0, 1.25},
 	"gpt-4o-mini": {0.15, 0.60, 0, 0.075},
 }
 
-var defaultPricing = modelPricing{3.69, 18.45, 4.61, 0.37}
+var defaultPricing = modelPricing{3.00, 15.00, 3.75, 0.30}
 
 func getPricing(model string) (modelPricing, bool) {
 	if model == "" {
@@ -164,9 +165,9 @@ func requireDB() *sql.DB {
 
 // ── Commands ──────────────────────────────────────────────────────────────────
 
-func cmdScan() {
+func cmdScan(since string) {
 	cHeader.Printf("Scanning %s ...\n", projectsDir)
-	if _, err := scan(projectsDir, dbPath, true); err != nil {
+	if _, err := scan(projectsDir, dbPath, true, since); err != nil {
 		color.Red("Scan error: %v", err)
 		os.Exit(1)
 	}
@@ -470,7 +471,7 @@ func cmdStats() {
 
 func cmdDashboard(port int, noBrowser bool) {
 	cHeader.Println("Running scan first...")
-	cmdScan()
+	cmdScan("")
 
 	cHeader.Println("\nStarting dashboard server...")
 	serveDashboard(port, noBrowser)

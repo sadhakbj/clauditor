@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -152,7 +153,8 @@ func projectNameFromCwd(cwd string) string {
 }
 
 // parseJSONLFile parses a JSONL file and returns session metadata and turns.
-func parseJSONLFile(filepath string) ([]sessionMeta, []turn, error) {
+// sinceDate, if non-empty (format "2006-01-02"), skips turns before that date.
+func parseJSONLFile(filepath, sinceDate string) ([]sessionMeta, []turn, error) {
 	f, err := os.Open(filepath)
 	if err != nil {
 		return nil, nil, err
@@ -211,6 +213,15 @@ func parseJSONLFile(filepath string) ([]sessionMeta, []turn, error) {
 			continue
 		}
 
+		// Skip turns before sinceDate (compare in local time — JSONL timestamps are UTC)
+		if sinceDate != "" {
+			if t, err := time.Parse(time.RFC3339Nano, rec.Timestamp); err == nil {
+				if t.Local().Format("2006-01-02") < sinceDate {
+					continue
+				}
+			}
+		}
+
 		u := rec.Message.Usage
 		inp := u.InputTokens
 		out := u.OutputTokens
@@ -260,7 +271,8 @@ func parseJSONLFile(filepath string) ([]sessionMeta, []turn, error) {
 }
 
 // parseJSONLFileFromLine parses only lines at index >= startLine (0-based).
-func parseJSONLFileFromLine(filePath string, startLine int) ([]turn, error) {
+// sinceDate, if non-empty, skips turns before that date.
+func parseJSONLFileFromLine(filePath string, startLine int, sinceDate string) ([]turn, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
 		return nil, err
@@ -290,6 +302,14 @@ func parseJSONLFileFromLine(filePath string, startLine int) ([]turn, error) {
 		}
 		if rec.Type != "assistant" || rec.SessionID == "" {
 			continue
+		}
+
+		if sinceDate != "" {
+			if t, err := time.Parse(time.RFC3339Nano, rec.Timestamp); err == nil {
+				if t.Local().Format("2006-01-02") < sinceDate {
+					continue
+				}
+			}
 		}
 
 		u := rec.Message.Usage
@@ -494,7 +514,11 @@ type scanResult struct {
 	SessionsSeen int
 }
 
-func scan(projDir, dbP string, verbose bool) (scanResult, error) {
+func scan(projDir, dbP string, verbose bool, sinceDate ...string) (scanResult, error) {
+	since := ""
+	if len(sinceDate) > 0 {
+		since = sinceDate[0]
+	}
 	db, err := openDB(dbP)
 	if err != nil {
 		return scanResult{}, err
@@ -557,7 +581,7 @@ func scan(projDir, dbP string, verbose bool) (scanResult, error) {
 		var sessions []session
 
 		if isNew {
-			metas, turns, err := parseJSONLFile(filePath)
+			metas, turns, err := parseJSONLFile(filePath, since)
 			if err != nil {
 				fmt.Printf("  Warning: error reading %s: %v\n", filePath, err)
 				continue
@@ -580,14 +604,14 @@ func scan(projDir, dbP string, verbose bool) (scanResult, error) {
 			}
 
 			// Get full session metadata from full parse (for timestamps)
-			metas, _, err := parseJSONLFile(filePath)
+			metas, _, err := parseJSONLFile(filePath, since)
 			if err != nil {
 				fmt.Printf("  Warning: error reading %s: %v\n", filePath, err)
 				continue
 			}
 
 			// Parse only new lines for turns
-			newTurns, err = parseJSONLFileFromLine(filePath, oldLines)
+			newTurns, err = parseJSONLFileFromLine(filePath, oldLines, since)
 			if err != nil {
 				fmt.Printf("  Warning: %v\n", err)
 			}

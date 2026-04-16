@@ -114,7 +114,7 @@ func TestParseJSONLFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	metas, turns, err := parseJSONLFile(jsonlPath)
+	metas, turns, err := parseJSONLFile(jsonlPath, "")
 	if err != nil {
 		t.Fatalf("parseJSONLFile error: %v", err)
 	}
