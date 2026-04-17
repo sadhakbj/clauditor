@@ -4,7 +4,6 @@ project_name: clauditor
 
 before:
   hooks:
-    - sh -c "cd frontend && npm ci && npm run build"
     - go mod tidy
 
 builds:
