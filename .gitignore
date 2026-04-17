@@ -8,8 +8,9 @@ clauditor.exe
 # Local database (default path is ~/.claude/usage.db, but ignore any local override)
 *.db
 
-# GoReleaser output
-dist/
+# GoReleaser output (root-level only, not frontend/dist)
+/dist/
 
 # Frontend dependencies
 frontend/node_modules/
+.idea/
