@@ -156,10 +156,6 @@ func requireDB() *sql.DB {
 		color.Red("Error opening database: %v", err)
 		os.Exit(1)
 	}
-	if err := initDB(db); err != nil {
-		color.Red("Error initializing database: %v", err)
-		os.Exit(1)
-	}
 	return db
 }
 

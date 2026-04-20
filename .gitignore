@@ -1,6 +1,5 @@
 # Binaries
-clauditor
-clauditor.exe
+bin/
 
 # Go build cache
 *.test

@@ -1,21 +1,26 @@
 .PHONY: dev dev-backend dev-frontend build build-frontend install clean
 
 # ── Dev ───────────────────────────────────────────────────────────────────────
-# Run both backend and frontend dev servers in parallel.
+# Run backend dev server. Frontend dev server runs if npm/vite available.
 # Backend on :8080, Vite on :5173 (proxies /api → backend).
-dev:
-	@make -j2 dev-backend dev-frontend
+dev: setup-dist
+	@make -j2 dev-backend dev-frontend || true
 
 dev-backend:
 	go run . dashboard --no-browser
 
 dev-frontend:
-	cd frontend && npm run dev
+	cd frontend && npm run dev 2>/dev/null || echo "Frontend dev server not available (run 'make deps' to install npm dependencies)"
+
+# Create minimal frontend/dist for development (satisfies go:embed)
+setup-dist:
+	mkdir -p frontend/dist
+	echo '<!DOCTYPE html><html><head><meta name="clauditor-dev-mode" content="1"></head><body></body></html>' > frontend/dist/index.html
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 # Full production build: compile frontend → embed into Go binary.
 build: build-frontend
-	go build -o clauditor .
+	go build -o bin/clauditor .
 
 build-frontend:
 	cd frontend && npm run build
@@ -32,5 +37,5 @@ deps:
 
 # ── Clean ─────────────────────────────────────────────────────────────────────
 clean:
-	rm -f clauditor
+	rm -f bin/clauditor
 	rm -rf frontend/dist

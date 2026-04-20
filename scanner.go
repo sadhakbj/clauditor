@@ -4,15 +4,21 @@ package main
 import (
 	"bufio"
 	"database/sql"
+	"embed"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
 )
+
+//go:embed migrations/*.sql
+var migrationsFS embed.FS
 
 var projectsDir = filepath.Join(homeDir(), ".claude", "projects")
 var dbPath = filepath.Join(homeDir(), ".claude", "usage.db")
@@ -28,55 +34,141 @@ func homeDir() string {
 // ── DB helpers ────────────────────────────────────────────────────────────────
 
 func openDB(path string) (*sql.DB, error) {
-	return sql.Open("sqlite", path)
+	return openDBWithMigrations(path, true)
+}
+
+func openDBWithMigrations(path string, runMigrations bool) (*sql.DB, error) {
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		return nil, err
+	}
+	if runMigrations {
+		// Run migrations automatically on DB open
+		if err := initDB(db); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("failed to initialize database: %w", err)
+		}
+	}
+	return db, nil
 }
 
 func initDB(db *sql.DB) error {
+	// Create schema_migrations table for tracking
 	_, err := db.Exec(`
-		CREATE TABLE IF NOT EXISTS sessions (
-			session_id              TEXT PRIMARY KEY,
-			project_name            TEXT,
-			first_timestamp         TEXT,
-			last_timestamp          TEXT,
-			git_branch              TEXT,
-			total_input_tokens      INTEGER DEFAULT 0,
-			total_output_tokens     INTEGER DEFAULT 0,
-			total_cache_read        INTEGER DEFAULT 0,
-			total_cache_creation    INTEGER DEFAULT 0,
-			model                   TEXT,
-			turn_count              INTEGER DEFAULT 0,
-			tool                    TEXT NOT NULL DEFAULT 'claude_code'
-		);
-
-		CREATE TABLE IF NOT EXISTS turns (
-			id                      INTEGER PRIMARY KEY AUTOINCREMENT,
-			session_id              TEXT,
-			timestamp               TEXT,
-			model                   TEXT,
-			input_tokens            INTEGER DEFAULT 0,
-			output_tokens           INTEGER DEFAULT 0,
-			cache_read_tokens       INTEGER DEFAULT 0,
-			cache_creation_tokens   INTEGER DEFAULT 0,
-			tool_name               TEXT,
-			cwd                     TEXT,
-			tool                    TEXT NOT NULL DEFAULT 'claude_code'
-		);
-
-		CREATE TABLE IF NOT EXISTS processed_files (
-			path    TEXT PRIMARY KEY,
-			mtime   REAL,
-			lines   INTEGER
-		);
-
-		CREATE INDEX IF NOT EXISTS idx_turns_session    ON turns(session_id);
-		CREATE INDEX IF NOT EXISTS idx_turns_timestamp  ON turns(timestamp);
-		CREATE INDEX IF NOT EXISTS idx_sessions_first   ON sessions(first_timestamp);
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			version INTEGER PRIMARY KEY,
+			applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		)
 	`)
 	if err != nil {
 		return err
 	}
 
+	// Run pending migrations
+	if err := runMigrations(db); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func runMigrations(db *sql.DB) error {
+	// Get current migration version
+	var currentVersion int
+	row := db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`)
+	if err := row.Scan(&currentVersion); err != nil && err != sql.ErrNoRows {
+		return err
+	}
+
+	// Load migration files
+	migrations, err := loadMigrations()
+	if err != nil {
+		return err
+	}
+
+	// Run pending migrations
+	for _, m := range migrations {
+		if m.version <= currentVersion {
+			continue
+		}
+		if err := applyMigration(db, m); err != nil {
+			return fmt.Errorf("failed to apply migration %d: %w", m.version, err)
+		}
+	}
+
+	return nil
+}
+
+type migration struct {
+	version int
+	name    string
+	sql     string
+}
+
+func loadMigrations() ([]migration, error) {
+	entries, err := fs.ReadDir(migrationsFS, "migrations")
+	if err != nil {
+		return nil, err
+	}
+
+	var migrations []migration
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+
+		// Parse version from filename (e.g., 00001_initial_schema.sql)
+		parts := strings.Split(entry.Name(), "_")
+		if len(parts) < 1 {
+			continue
+		}
+		versionStr := parts[0]
+		version, err := strconv.Atoi(versionStr)
+		if err != nil {
+			continue
+		}
+
+		content, err := fs.ReadFile(migrationsFS, filepath.Join("migrations", entry.Name()))
+		if err != nil {
+			return nil, err
+		}
+
+		migrations = append(migrations, migration{
+			version: version,
+			name:    strings.TrimSuffix(entry.Name(), ".sql"),
+			sql:     string(content),
+		})
+	}
+
+	// Sort by version
+	for i := 1; i < len(migrations); i++ {
+		for j := i; j > 0 && migrations[j].version < migrations[j-1].version; j-- {
+			migrations[j], migrations[j-1] = migrations[j-1], migrations[j]
+		}
+	}
+
+	return migrations, nil
+}
+
+func applyMigration(db *sql.DB, m migration) error {
+	// Run migration in transaction
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Execute migration SQL
+	if _, err := tx.Exec(m.sql); err != nil {
+		return err
+	}
+
+	// Record migration
+	if _, err := tx.Exec(`INSERT INTO schema_migrations (version) VALUES (?)`, m.version); err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }
 
 // ── Data types ────────────────────────────────────────────────────────────────
@@ -123,11 +215,11 @@ type jsonRecord struct {
 	Cwd       string `json:"cwd"`
 	GitBranch string `json:"gitBranch"`
 	Message   struct {
-		Model   string `json:"model"`
-		Usage   struct {
-			InputTokens          int64 `json:"input_tokens"`
-			OutputTokens         int64 `json:"output_tokens"`
-			CacheReadInputTokens int64 `json:"cache_read_input_tokens"`
+		Model string `json:"model"`
+		Usage struct {
+			InputTokens              int64 `json:"input_tokens"`
+			OutputTokens             int64 `json:"output_tokens"`
+			CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
 			CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
 		} `json:"usage"`
 		Content []struct {
@@ -367,12 +459,12 @@ func countLines(filePath string) (int, error) {
 
 func aggregateSessions(metas []sessionMeta, turns []turn) []session {
 	type stats struct {
-		totalInput   int64
-		totalOutput  int64
-		totalCR      int64
-		totalCC      int64
-		turnCount    int64
-		model        string
+		totalInput  int64
+		totalOutput int64
+		totalCR     int64
+		totalCC     int64
+		turnCount   int64
+		model       string
 	}
 	statsMap := map[string]*stats{}
 	for _, t := range turns {
@@ -524,10 +616,6 @@ func scan(projDir, dbP string, verbose bool, sinceDate ...string) (scanResult, e
 		return scanResult{}, err
 	}
 	defer db.Close()
-
-	if err := initDB(db); err != nil {
-		return scanResult{}, err
-	}
 
 	var jsonlFiles []string
 	err = filepath.WalkDir(projDir, func(path string, d os.DirEntry, err error) error {

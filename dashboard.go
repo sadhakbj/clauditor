@@ -75,18 +75,21 @@ type dashboardData struct {
 }
 
 func getDashboardData() dashboardData {
-	db, err := openDB(dbPath)
+	db, err := openDBWithMigrations(dbPath, false)
 	if err != nil {
 		return dashboardData{Error: "Cannot open database. Run: claude-usage scan"}
 	}
 	defer db.Close()
 
 	// All models
-	modelRows, _ := db.Query(`
+	modelRows, err := db.Query(`
 		SELECT COALESCE(model, 'unknown') as model
 		FROM turns
 		GROUP BY model
 		ORDER BY SUM(input_tokens + output_tokens) DESC`)
+	if err != nil {
+		return dashboardData{Error: "Query error: " + err.Error()}
+	}
 	defer modelRows.Close()
 
 	var allModels []string
@@ -97,11 +100,14 @@ func getDashboardData() dashboardData {
 	}
 
 	// All tools
-	toolRows, _ := db.Query(`
+	toolRows, err := db.Query(`
 		SELECT COALESCE(tool, 'claude_code') as tool
 		FROM turns
 		GROUP BY tool
 		ORDER BY tool`)
+	if err != nil {
+		return dashboardData{Error: "Query error: " + err.Error()}
+	}
 	defer toolRows.Close()
 
 	var allTools []string
@@ -112,7 +118,7 @@ func getDashboardData() dashboardData {
 	}
 
 	// Per-tool summary
-	tsrows, _ := db.Query(`
+	tsrows, err := db.Query(`
 		SELECT
 			COALESCE(tool, 'claude_code') as tool,
 			COUNT(DISTINCT session_id)    as sessions,
@@ -124,6 +130,9 @@ func getDashboardData() dashboardData {
 		FROM turns
 		GROUP BY tool
 		ORDER BY tool`)
+	if err != nil {
+		return dashboardData{Error: "Query error: " + err.Error()}
+	}
 	defer tsrows.Close()
 
 	var toolSummary []toolSummaryRow
@@ -134,7 +143,7 @@ func getDashboardData() dashboardData {
 	}
 
 	// Daily per-model (local date, includes session_id for frontend filtered cost)
-	drows, _ := db.Query(`
+	drows, err := db.Query(`
 		SELECT
 			substr(datetime(timestamp, 'localtime'), 1, 10) as day,
 			COALESCE(model, 'unknown')        as model,
@@ -148,6 +157,9 @@ func getDashboardData() dashboardData {
 		FROM turns
 		GROUP BY day, model, tool, session_id
 		ORDER BY day, model`)
+	if err != nil {
+		return dashboardData{Error: "Query error: " + err.Error()}
+	}
 	defer drows.Close()
 
 	var dailyByModel []dailyModelRow
@@ -307,7 +319,7 @@ type sessionDetailResponse struct {
 }
 
 func getSessionDetail(sessionID string) (sessionDetailResponse, error) {
-	db, err := openDB(dbPath)
+	db, err := openDBWithMigrations(dbPath, false)
 	if err != nil {
 		return sessionDetailResponse{}, err
 	}
@@ -396,11 +408,11 @@ type requestGroup struct {
 }
 
 type conversationEntry struct {
-	Role           string
-	Timestamp      int64
-	Content        string
-	ThinkingLen    int // byte length of thinking text (for token estimation)
-	HasThinking    bool
+	Role        string
+	Timestamp   int64
+	Content     string
+	ThinkingLen int // byte length of thinking text (for token estimation)
+	HasThinking bool
 }
 
 type sessionRequestsResponse struct {
@@ -418,10 +430,10 @@ type sessionRequestsResponse struct {
 // should be excluded when finding the triggering message for a request group.
 func isSyntheticMessage(content string) bool {
 	synthetic := []string{
-		"<",                        // XML-like injected context (<task-notification>, <local-command-*>, etc.)
-		"[Request interrupted",     // "Request interrupted by user for tool use"
-		"[Image: source:",          // image path reference injected alongside the real message
-		"[Precompacted",            // precompacted context summary
+		"<",                    // XML-like injected context (<task-notification>, <local-command-*>, etc.)
+		"[Request interrupted", // "Request interrupted by user for tool use"
+		"[Image: source:",      // image path reference injected alongside the real message
+		"[Precompacted",        // precompacted context summary
 		"This session is being continued from a previous conversation",
 	}
 	for _, prefix := range synthetic {
@@ -445,7 +457,7 @@ func findMsgForTurn(msgs []userMessage, turnTs int64) *userMessage {
 }
 
 func getSessionRequests(sessionID string, page, limit int) (sessionRequestsResponse, error) {
-	db, err := openDB(dbPath)
+	db, err := openDBWithMigrations(dbPath, false)
 	if err != nil {
 		return sessionRequestsResponse{}, err
 	}
@@ -470,7 +482,7 @@ func getSessionRequests(sessionID string, page, limit int) (sessionRequestsRespo
 		SessionID: sid, Project: project,
 		FirstTs: parseTs(first), LastTs: parseTs(last), LastDate: lastDate,
 		DurationMin: sessionDurationMin(first, last),
-		Model: model, Tool: tool, Turns: turns,
+		Model:       model, Tool: tool, Turns: turns,
 		Input: inp, Output: out, CacheRead: cr, CacheCreation: cc,
 	}
 
@@ -656,8 +668,8 @@ func getSessionMessages(sessionID string) ([]userMessage, error) {
 	defer f.Close()
 
 	type rawRecord struct {
-		Type      string          `json:"type"`
-		Timestamp string          `json:"timestamp"`
+		Type      string `json:"type"`
+		Timestamp string `json:"timestamp"`
 		Message   struct {
 			Role    string          `json:"role"`
 			Content json.RawMessage `json:"content"`
@@ -711,8 +723,8 @@ func getSessionConversation(sessionID string) ([]conversationEntry, error) {
 	defer f.Close()
 
 	type rawRecord struct {
-		Type      string          `json:"type"`
-		Timestamp string          `json:"timestamp"`
+		Type      string `json:"type"`
+		Timestamp string `json:"timestamp"`
 		Message   struct {
 			Role    string          `json:"role"`
 			Content json.RawMessage `json:"content"`
@@ -828,6 +840,28 @@ func corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// ── Vite proxy ─────────────────────────────────────────────────────────────────
+
+func viteProxy(w http.ResponseWriter, r *http.Request) bool {
+	// Try common Vite ports
+	ports := []string{"5173", "5174", "5175"}
+	for _, port := range ports {
+		viteURL := "http://localhost:" + port + r.URL.RequestURI()
+		resp, err := http.Get(viteURL)
+		if err == nil {
+			defer resp.Body.Close()
+			// Copy headers
+			for k, v := range resp.Header {
+				w.Header()[k] = v
+			}
+			w.WriteHeader(resp.StatusCode)
+			io.Copy(w, resp.Body) //nolint:errcheck
+			return true
+		}
+	}
+	return false // Vite not available
+}
+
 // ── HTTP handler ──────────────────────────────────────────────────────────────
 
 func newDashboardMux() http.Handler {
@@ -846,7 +880,13 @@ func newDashboardMux() http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		// Try to open the requested file; fall back to index.html for SPA routing
+
+		// Try to proxy to Vite dev server if available
+		if viteProxy(w, r) {
+			return
+		}
+
+		// Fall back to embedded files
 		f, err := distSub.Open(strings.TrimPrefix(r.URL.Path, "/"))
 		if err != nil {
 			// Serve index.html for all unmatched paths (SPA client-side routing)
@@ -856,8 +896,30 @@ func newDashboardMux() http.Handler {
 				return
 			}
 			defer idx.Close()
+
+			// Check if this is the dev-mode placeholder
+			content, _ := io.ReadAll(idx)
+			if strings.Contains(string(content), "clauditor-dev-mode") {
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.Write([]byte(`<!DOCTYPE html>
+<html>
+<head><title>Clauditor - Frontend Not Built</title></head>
+<body style="font-family: system-ui; max-width: 600px; margin: 100px auto; padding: 20px;">
+<h1>Frontend Not Available</h1>
+<p>The frontend development server is not running.</p>
+<p>To fix this:</p>
+<ul>
+<li><strong>For development:</strong> Run <code>make deps</code> to install npm dependencies, then <code>make dev</code></li>
+<li><strong>For production:</strong> Run <code>make build</code> to build the embedded frontend</li>
+</ul>
+<p>API is available at <a href="/api/data">/api/data</a></p>
+</body>
+</html>`))
+				return
+			}
+
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			io.Copy(w, idx) //nolint:errcheck
+			w.Write(content)
 			return
 		}
 		f.Close()
@@ -988,4 +1050,3 @@ func openBrowser(url string) {
 	}
 	_ = cmd.Start()
 }
-
