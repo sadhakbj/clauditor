@@ -238,10 +238,6 @@ func scanCodex(codexSessionsDir, dbP string, verbose bool) (scanResult, error) {
 	}
 	defer db.Close()
 
-	if err := initDB(db); err != nil {
-		return scanResult{}, err
-	}
-
 	var jsonlFiles []string
 	err = filepath.WalkDir(codexSessionsDir, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {

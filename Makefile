@@ -15,7 +15,7 @@ dev-frontend:
 # ── Build ─────────────────────────────────────────────────────────────────────
 # Full production build: compile frontend → embed into Go binary.
 build: build-frontend
-	go build -o clauditor .
+	go build -o bin/clauditor .
 
 build-frontend:
 	cd frontend && npm run build
@@ -32,5 +32,5 @@ deps:
 
 # ── Clean ─────────────────────────────────────────────────────────────────────
 clean:
-	rm -f clauditor
+	rm -f bin/clauditor
 	rm -rf frontend/dist
