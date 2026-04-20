@@ -840,28 +840,6 @@ func corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// ── Vite proxy ─────────────────────────────────────────────────────────────────
-
-func viteProxy(w http.ResponseWriter, r *http.Request) bool {
-	// Try common Vite ports
-	ports := []string{"5173", "5174", "5175"}
-	for _, port := range ports {
-		viteURL := "http://localhost:" + port + r.URL.RequestURI()
-		resp, err := http.Get(viteURL)
-		if err == nil {
-			defer resp.Body.Close()
-			// Copy headers
-			for k, v := range resp.Header {
-				w.Header()[k] = v
-			}
-			w.WriteHeader(resp.StatusCode)
-			io.Copy(w, resp.Body) //nolint:errcheck
-			return true
-		}
-	}
-	return false // Vite not available
-}
-
 // ── HTTP handler ──────────────────────────────────────────────────────────────
 
 func newDashboardMux() http.Handler {
@@ -880,13 +858,7 @@ func newDashboardMux() http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-
-		// Try to proxy to Vite dev server if available
-		if viteProxy(w, r) {
-			return
-		}
-
-		// Fall back to embedded files
+		// Try to open the requested file; fall back to index.html for SPA routing
 		f, err := distSub.Open(strings.TrimPrefix(r.URL.Path, "/"))
 		if err != nil {
 			// Serve index.html for all unmatched paths (SPA client-side routing)
@@ -896,30 +868,8 @@ func newDashboardMux() http.Handler {
 				return
 			}
 			defer idx.Close()
-
-			// Check if this is the dev-mode placeholder
-			content, _ := io.ReadAll(idx)
-			if strings.Contains(string(content), "clauditor-dev-mode") {
-				w.Header().Set("Content-Type", "text/html; charset=utf-8")
-				w.Write([]byte(`<!DOCTYPE html>
-<html>
-<head><title>Clauditor - Frontend Not Built</title></head>
-<body style="font-family: system-ui; max-width: 600px; margin: 100px auto; padding: 20px;">
-<h1>Frontend Not Available</h1>
-<p>The frontend development server is not running.</p>
-<p>To fix this:</p>
-<ul>
-<li><strong>For development:</strong> Run <code>make deps</code> to install npm dependencies, then <code>make dev</code></li>
-<li><strong>For production:</strong> Run <code>make build</code> to build the embedded frontend</li>
-</ul>
-<p>API is available at <a href="/api/data">/api/data</a></p>
-</body>
-</html>`))
-				return
-			}
-
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Write(content)
+			io.Copy(w, idx) //nolint:errcheck
 			return
 		}
 		f.Close()
