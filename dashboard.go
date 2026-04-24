@@ -424,6 +424,36 @@ type sessionRequestsResponse struct {
 	TotalCostUSD float64        `json:"total_cost_usd"` // sum of per-turn costs across all models
 }
 
+func assistantTexts(preActionText, finalResponse string, thinkingTokens int) (string, string) {
+	// Claude often emits a thinking/pre-action assistant entry followed by the
+	// final answer. Codex often emits only a single final assistant message.
+	// When there's no thinking and only one assistant text, render it as the
+	// response instead of hiding it as a "duplicate" pre-action entry.
+	if thinkingTokens == 0 && preActionText != "" && finalResponse == preActionText {
+		return "", finalResponse
+	}
+	if finalResponse == preActionText {
+		return preActionText, ""
+	}
+	return preActionText, finalResponse
+}
+
+func shouldReplaceDisplayMessage(current *userMessage, candidate userMessage) bool {
+	if current == nil {
+		return true
+	}
+	if current.Content == "" {
+		return true
+	}
+	if isSyntheticMessage(current.Content) {
+		return true
+	}
+	// Prefer the newer candidate only; this keeps the timestamp-based match for
+	// Codex sessions where the nearest real prompt is already correct and avoids
+	// overwriting it with an older AGENTS/environment entry.
+	return candidate.TimestampTs >= current.TimestampTs
+}
+
 // isSyntheticMessage returns true for user messages injected by Claude Code
 // (task notifications, local command outputs, image path references, context
 // summaries, interruption notices). These are NOT real user-typed messages and
@@ -577,12 +607,10 @@ func getSessionRequests(sessionID string, page, limit int) (sessionRequestsRespo
 				finalResponse = e.Content
 			}
 		}
+		preActionText, finalResponse = assistantTexts(preActionText, finalResponse, thinkingTokens)
 		groups[i].PreActionText = preActionText
 		groups[i].ThinkingTokens = thinkingTokens
-		// If there's only one assistant entry, pre-action and final are the same — avoid duplication
-		if finalResponse != preActionText {
-			groups[i].AssistantResponse = finalResponse
-		}
+		groups[i].AssistantResponse = finalResponse
 
 		// Compute elapsed time using positional matching: look backwards from the first
 		// assistant entry to find the real triggering user message, skipping synthetics.
@@ -595,9 +623,12 @@ func getSessionRequests(sessionID string, page, limit int) (sessionRequestsRespo
 				if e.Role != "user" || e.Content == "" || isSyntheticMessage(e.Content) {
 					continue
 				}
-				groups[i].Message = &userMessage{TimestampTs: e.Timestamp, Content: e.Content}
-				if groupTs > e.Timestamp {
-					groups[i].ElapsedSec = groupTs - e.Timestamp
+				candidate := userMessage{TimestampTs: e.Timestamp, Content: e.Content}
+				if shouldReplaceDisplayMessage(groups[i].Message, candidate) {
+					groups[i].Message = &candidate
+					if groupTs > e.Timestamp {
+						groups[i].ElapsedSec = groupTs - e.Timestamp
+					}
 				}
 				break
 			}
@@ -644,10 +675,40 @@ type userMessage struct {
 	Content     string `json:"content"`
 }
 
-func getSessionMessages(sessionID string) ([]userMessage, error) {
-	// Find the JSONL file by searching project dirs
+type claudeConversationRecord struct {
+	Type      string `json:"type"`
+	Timestamp string `json:"timestamp"`
+	Message   struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+	} `json:"message"`
+}
+
+type codexConversationRecord struct {
+	Type      string `json:"type"`
+	Timestamp string `json:"timestamp"`
+	Payload   struct {
+		Type    string          `json:"type"`
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+	} `json:"payload"`
+}
+
+type codexEventMsgRecord struct {
+	Type      string `json:"type"`
+	Timestamp string `json:"timestamp"`
+	Payload   struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+	} `json:"payload"`
+}
+
+func findSessionJSONLPath(rootDir, sessionID string) string {
+	if rootDir == "" {
+		return ""
+	}
 	jsonlPath := ""
-	filepath.WalkDir(projectsDir, func(path string, d os.DirEntry, err error) error {
+	filepath.WalkDir(rootDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
 		}
@@ -657,6 +718,18 @@ func getSessionMessages(sessionID string) ([]userMessage, error) {
 		}
 		return nil
 	})
+	return jsonlPath
+}
+
+func resolveSessionJSONLPath(sessionID string) string {
+	if path := findSessionJSONLPath(projectsDir, sessionID); path != "" {
+		return path
+	}
+	return findSessionJSONLPath(codexDir, sessionID)
+}
+
+func getSessionMessages(sessionID string) ([]userMessage, error) {
+	jsonlPath := resolveSessionJSONLPath(sessionID)
 	if jsonlPath == "" {
 		return nil, fmt.Errorf("conversation file not found")
 	}
@@ -667,32 +740,49 @@ func getSessionMessages(sessionID string) ([]userMessage, error) {
 	}
 	defer f.Close()
 
-	type rawRecord struct {
-		Type      string `json:"type"`
-		Timestamp string `json:"timestamp"`
-		Message   struct {
-			Role    string          `json:"role"`
-			Content json.RawMessage `json:"content"`
-		} `json:"message"`
-	}
-
 	var msgs []userMessage
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 4*1024*1024), 4*1024*1024)
 	for sc.Scan() {
-		var rec rawRecord
-		if err := json.Unmarshal(sc.Bytes(), &rec); err != nil {
+		line := sc.Bytes()
+
+		var claudeRec claudeConversationRecord
+		if err := json.Unmarshal(line, &claudeRec); err == nil &&
+			claudeRec.Type == "user" && claudeRec.Message.Role == "user" {
+			text := extractText(claudeRec.Message.Content)
+			if text == "" {
+				continue
+			}
+			msgs = append(msgs, userMessage{
+				TimestampTs: parseTs(claudeRec.Timestamp),
+				Content:     text,
+			})
 			continue
 		}
-		if rec.Type != "user" || rec.Message.Role != "user" {
+
+		var eventRec codexEventMsgRecord
+		if err := json.Unmarshal(line, &eventRec); err == nil &&
+			eventRec.Type == "event_msg" && eventRec.Payload.Type == "user_message" && eventRec.Payload.Message != "" {
+			msgs = append(msgs, userMessage{
+				TimestampTs: parseTs(eventRec.Timestamp),
+				Content:     eventRec.Payload.Message,
+			})
 			continue
 		}
-		text := extractText(rec.Message.Content)
+
+		var codexRec codexConversationRecord
+		if err := json.Unmarshal(line, &codexRec); err != nil {
+			continue
+		}
+		if codexRec.Type != "response_item" || codexRec.Payload.Type != "message" || codexRec.Payload.Role != "user" {
+			continue
+		}
+		text := extractText(codexRec.Payload.Content)
 		if text == "" {
 			continue
 		}
 		msgs = append(msgs, userMessage{
-			TimestampTs: parseTs(rec.Timestamp),
+			TimestampTs: parseTs(codexRec.Timestamp),
 			Content:     text,
 		})
 	}
@@ -701,17 +791,7 @@ func getSessionMessages(sessionID string) ([]userMessage, error) {
 
 // getSessionConversation returns all user + assistant entries from the JSONL, sorted ASC.
 func getSessionConversation(sessionID string) ([]conversationEntry, error) {
-	jsonlPath := ""
-	filepath.WalkDir(projectsDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
-		}
-		if strings.HasSuffix(path, sessionID+".jsonl") {
-			jsonlPath = path
-			return filepath.SkipAll
-		}
-		return nil
-	})
+	jsonlPath := resolveSessionJSONLPath(sessionID)
 	if jsonlPath == "" {
 		return nil, fmt.Errorf("conversation file not found")
 	}
@@ -722,32 +802,57 @@ func getSessionConversation(sessionID string) ([]conversationEntry, error) {
 	}
 	defer f.Close()
 
-	type rawRecord struct {
-		Type      string `json:"type"`
-		Timestamp string `json:"timestamp"`
-		Message   struct {
-			Role    string          `json:"role"`
-			Content json.RawMessage `json:"content"`
-		} `json:"message"`
-	}
-
 	var raw []conversationEntry
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 4*1024*1024), 4*1024*1024)
 	for sc.Scan() {
-		var rec rawRecord
-		if err := json.Unmarshal(sc.Bytes(), &rec); err != nil {
+		line := sc.Bytes()
+
+		var eventRec codexEventMsgRecord
+		if err := json.Unmarshal(line, &eventRec); err == nil &&
+			eventRec.Type == "event_msg" && eventRec.Payload.Type == "user_message" && eventRec.Payload.Message != "" {
+			raw = append(raw, conversationEntry{
+				Role:      "user",
+				Timestamp: parseTs(eventRec.Timestamp),
+				Content:   eventRec.Payload.Message,
+			})
 			continue
 		}
-		role := rec.Message.Role
+
+		var role string
+		var timestamp string
+		var content json.RawMessage
+
+		var claudeRec claudeConversationRecord
+		if err := json.Unmarshal(line, &claudeRec); err == nil &&
+			(claudeRec.Message.Role == "user" || claudeRec.Message.Role == "assistant") {
+			role = claudeRec.Message.Role
+			timestamp = claudeRec.Timestamp
+			content = claudeRec.Message.Content
+		} else {
+			var codexRec codexConversationRecord
+			if err := json.Unmarshal(line, &codexRec); err != nil {
+				continue
+			}
+			if codexRec.Type != "response_item" || codexRec.Payload.Type != "message" {
+				continue
+			}
+			if codexRec.Payload.Role != "user" && codexRec.Payload.Role != "assistant" {
+				continue
+			}
+			role = codexRec.Payload.Role
+			timestamp = codexRec.Timestamp
+			content = codexRec.Payload.Content
+		}
+
 		if role != "user" && role != "assistant" {
 			continue
 		}
-		text := extractText(rec.Message.Content)
+		text := extractText(content)
 		thinkingLen := 0
 		hasThinking := false
 		if role == "assistant" {
-			t := extractThinking(rec.Message.Content)
+			t := extractThinking(content)
 			thinkingLen = len(t)
 			hasThinking = thinkingLen > 0
 		}
@@ -756,7 +861,7 @@ func getSessionConversation(sessionID string) ([]conversationEntry, error) {
 		}
 		raw = append(raw, conversationEntry{
 			Role:        role,
-			Timestamp:   parseTs(rec.Timestamp),
+			Timestamp:   parseTs(timestamp),
 			Content:     text,
 			ThinkingLen: thinkingLen,
 			HasThinking: hasThinking,
@@ -814,7 +919,7 @@ func extractText(raw json.RawMessage) string {
 	if json.Unmarshal(raw, &blocks) == nil {
 		var parts []string
 		for _, b := range blocks {
-			if b.Type == "text" && b.Text != "" {
+			if (b.Type == "text" || b.Type == "input_text" || b.Type == "output_text") && b.Text != "" {
 				parts = append(parts, b.Text)
 			}
 		}

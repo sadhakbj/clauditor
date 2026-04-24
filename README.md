@@ -100,13 +100,15 @@ Runs at `http://localhost:8080`. Shows:
 - Daily token usage (stacked: input / output / cache read / cache creation)
 - Breakdown by model
 - Top projects by cost
-- Session table
+- Session list and request-level drilldowns
 
 Filter by model and date range (today / 7d / 30d / 90d / all time). Refreshes automatically every 60 seconds — no page reload.
 
 ![Web dashboard](docs/images/web-dashboard.png)
 
-![Project-specific usage](docs/images/project-specific-usage.png)
+![Session detail page](docs/images/session-detail-page.png)
+
+![Chat detail](docs/images/chat-detail.png)
 
 ## Terminal UI
 
