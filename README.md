@@ -39,6 +39,12 @@ This installs the binary to `$GOPATH/bin` (usually `~/go/bin`). Run the same com
 export PATH="$PATH:$(go env GOPATH)/bin"
 ```
 
+Check the installed version with:
+
+```sh
+clauditor --version
+```
+
 **Without Go** — download a pre-built binary for your platform from [GitHub Releases](https://github.com/sadhakbj/clauditor/releases) and put it somewhere on your `$PATH`.
 
 ---

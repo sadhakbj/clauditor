@@ -16,9 +16,10 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "clauditor",
-	Short: "Claude Code usage dashboard",
-	Long:  "Clauditor — see exactly where your Claude Code tokens and costs are going.",
+	Use:     "clauditor",
+	Short:   "Claude Code usage dashboard",
+	Long:    "Clauditor — see exactly where your Claude Code tokens and costs are going.",
+	Version: resolveVersion(),
 }
 
 var scanCmd = &cobra.Command{
