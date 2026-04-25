@@ -6,6 +6,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/NimbleMarkets/ntcharts/barchart"
 	"github.com/charmbracelet/lipgloss"
@@ -16,6 +17,8 @@ var (
 	colOutput = lipgloss.Color("#c084fc") // purple/violet – matches web Output
 	// colEm    = cache read  (green,  defined in tui.go)
 	// colAmber = cache creation (amber, defined in tui.go)
+	colQuestionBorder = lipgloss.Color("#0ea5e9")
+	colAnswerBorder   = lipgloss.Color("#10b981")
 )
 
 // ── Overview view ─────────────────────────────────────────────────────────────
@@ -238,7 +241,7 @@ func renderDailyChartNT(m tuiModel, cutoff string, panelW, panelH int) string {
 
 func renderModelDonut(m tuiModel, cutoff string, panelW, panelH int) string {
 	type modelAgg struct {
-		model        string
+		model            string
 		inp, out, cr, cc int64
 	}
 	aggMap := map[string]*modelAgg{}
@@ -284,7 +287,10 @@ func renderModelDonut(m tuiModel, cutoff string, panelW, panelH int) string {
 	})
 
 	// Build segments
-	type seg struct{ start, end float64; col lipgloss.Color }
+	type seg struct {
+		start, end float64
+		col        lipgloss.Color
+	}
 	var segments []seg
 	var cum float64
 	for _, a := range aggs {
@@ -395,4 +401,295 @@ func renderSessions(m tuiModel, _ int) string {
 func renderModels(m tuiModel, _ int) string {
 	tbl := lipgloss.NewStyle().MarginLeft(2).Render(m.modelTable.View())
 	return "\n" + tbl
+}
+
+func renderSessionRequests(m tuiModel, _ int) string {
+	if m.selectedSession == nil {
+		return center(styleDim.Render("No session selected"), m.width, m.height-2)
+	}
+	if m.detailLoading {
+		return center(m.spinner.View()+"  Loading session requests…", m.width, m.height-2)
+	}
+	if m.detailErr != "" {
+		return center(lipgloss.NewStyle().Foreground(colRed).Render("✗ "+m.detailErr), m.width, m.height-2)
+	}
+	if m.selectedSessionReqs == nil {
+		return center(styleDim.Render("No request data"), m.width, m.height-2)
+	}
+
+	var parts []string
+	parts = append(parts, renderSessionHeader(*m.selectedSessionReqs))
+	parts = append(parts, "")
+
+	for i, group := range m.selectedSessionReqs.Groups {
+		parts = append(parts, renderRequestSummaryItem(group, i, m.selectedRequestIndex == i, m.width))
+	}
+	if len(m.selectedSessionReqs.Groups) == 0 {
+		parts = append(parts, styleDim.Render("  No requests found for this session"))
+	}
+	return strings.Join(parts, "\n")
+}
+
+func renderRequestDetail(m tuiModel, _ int) string {
+	req := m.selectedRequest()
+	if req == nil || m.selectedSessionReqs == nil {
+		return styleDim.Render("No request selected")
+	}
+
+	total := len(m.selectedSessionReqs.Groups)
+	index := total - m.selectedRequestIndex
+	metaParts := []string{
+		fmt.Sprintf("Request %d/%d", index, total),
+		fmt.Sprintf("%d calls", len(req.Turns)),
+		fmtCost(req.CostUSD),
+	}
+	if req.ElapsedSec > 0 {
+		metaParts = append(metaParts, fmt.Sprintf("%ds elapsed", req.ElapsedSec))
+	}
+	if req.FirstTs > 0 {
+		metaParts = append(metaParts, time.Unix(req.FirstTs, 0).Local().Format("2006-01-02 15:04"))
+	}
+
+	question := requestQuestion(req)
+	answer := requestAnswer(req)
+	if question == "" {
+		question = "No user question captured."
+	}
+	if answer == "" {
+		answer = "No assistant answer captured."
+	}
+
+	contentWidth := m.width - 4
+	if contentWidth < 20 {
+		contentWidth = 20
+	}
+	question = wrapBlock(question, contentWidth)
+	answer = wrapBlock(answer, contentWidth)
+
+	questionBox := renderDetailBlock("Question", question, contentWidth, colQuestionBorder)
+	answerBox := renderDetailBlock("Answer", answer, contentWidth, colAnswerBorder)
+
+	var parts []string
+	parts = append(parts, "  "+styleSub.Render(strings.Join(metaParts, "  ·  ")))
+	parts = append(parts, "")
+	parts = append(parts, "  "+questionBox)
+	parts = append(parts, "")
+	parts = append(parts, "  "+answerBox)
+	return strings.Join(parts, "\n")
+}
+
+func renderSessionHeader(data sessionRequestsResponse) string {
+	session := data.Session
+	meta := []string{
+		fmt.Sprintf("%d requests", data.TotalGroups),
+		fmt.Sprintf("%d turns", session.Turns),
+		fmt.Sprintf("%.0fm", session.DurationMin),
+	}
+	if session.Model != "" {
+		meta = append(meta, session.Model)
+	}
+	if session.Tool != "" {
+		meta = append(meta, session.Tool)
+	}
+
+	idSuffix := session.SessionID
+	if len(idSuffix) > 8 {
+		idSuffix = idSuffix[len(idSuffix)-8:]
+	}
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colBorder).
+		Padding(0, 1).
+		Render(
+			styleTitle.Render(session.Project) + "\n" +
+				styleSub.Render("session "+idSuffix) + "\n" +
+				styleDim.Render(strings.Join(meta, "  ·  ")),
+		)
+	return "  " + box
+}
+
+func renderRequestSummaryItem(group requestGroup, idx int, selected bool, totalW int) string {
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colBorder).
+		Padding(0, 1)
+	if selected {
+		boxStyle = boxStyle.BorderForeground(colEm)
+	}
+
+	width := totalW - 4
+	if width < 40 {
+		width = 40
+	}
+	boxStyle = boxStyle.Width(width)
+
+	label := fmt.Sprintf("#%d", idx+1)
+	if selected {
+		label = "▶ " + label
+	}
+	metaParts := []string{
+		fmt.Sprintf("%d calls", len(group.Turns)),
+		fmtCost(group.CostUSD),
+	}
+	if group.ElapsedSec > 0 {
+		metaParts = append(metaParts, fmt.Sprintf("%ds elapsed", group.ElapsedSec))
+	}
+
+	question := truncatePreview(requestQuestion(&group), width-6, 2)
+	answer := truncatePreview(requestAnswer(&group), width-6, 3)
+
+	var content []string
+	content = append(content, lipgloss.NewStyle().Foreground(colEm).Bold(true).Render(label)+"  "+styleSub.Render(strings.Join(metaParts, "  ·  ")))
+	content = append(content, "")
+	content = append(content, styleTitle.Render("Question"))
+	content = append(content, indentBlock(question, ""))
+	content = append(content, "")
+	content = append(content, styleTitle.Render("Answer"))
+	content = append(content, indentBlock(answer, ""))
+	return "  " + boxStyle.Render(strings.Join(content, "\n"))
+}
+
+func requestQuestion(group *requestGroup) string {
+	if group == nil || group.Message == nil {
+		return ""
+	}
+	return sanitizeText(group.Message.Content)
+}
+
+func requestAnswer(group *requestGroup) string {
+	if group == nil {
+		return ""
+	}
+	answer := sanitizeText(group.AssistantResponse)
+	if answer != "" {
+		return answer
+	}
+	return sanitizeText(group.PreActionText)
+}
+
+func sanitizeText(s string) string {
+	s = strings.ReplaceAll(s, "\t", " ")
+	lines := strings.Split(s, "\n")
+	var cleaned []string
+	lastBlank := false
+	for _, line := range lines {
+		line = strings.TrimRight(line, " ")
+		if strings.TrimSpace(line) == "" {
+			if !lastBlank {
+				cleaned = append(cleaned, "")
+			}
+			lastBlank = true
+			continue
+		}
+		cleaned = append(cleaned, strings.TrimSpace(line))
+		lastBlank = false
+	}
+	return strings.TrimSpace(strings.Join(cleaned, "\n"))
+}
+
+func truncatePreview(s string, width, maxLines int) string {
+	if s == "" {
+		return styleDim.Render("No text")
+	}
+	lines := wrapText(s, width)
+	if len(lines) <= maxLines {
+		return strings.Join(lines, "\n")
+	}
+	lines = lines[:maxLines]
+	last := []rune(lines[maxLines-1])
+	if len(last) > 0 {
+		if len(last) >= 1 {
+			last = last[:len(last)-1]
+		}
+		lines[maxLines-1] = string(last) + "…"
+	}
+	return strings.Join(lines, "\n")
+}
+
+func wrapText(s string, width int) []string {
+	if width < 10 {
+		width = 10
+	}
+	var out []string
+	for _, paragraph := range strings.Split(s, "\n") {
+		if paragraph == "" {
+			out = append(out, "")
+			continue
+		}
+		words := strings.Fields(paragraph)
+		if len(words) == 0 {
+			out = append(out, "")
+			continue
+		}
+		var current []string
+		for _, word := range words {
+			current = append(current, splitLongWord(word, width)...)
+		}
+		line := current[0]
+		for _, word := range current[1:] {
+			if lipgloss.Width(line)+1+lipgloss.Width(word) > width {
+				out = append(out, line)
+				line = word
+				continue
+			}
+			line += " " + word
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+func wrapBlock(s string, width int) string {
+	return strings.Join(wrapText(s, width), "\n")
+}
+
+func splitLongWord(word string, width int) []string {
+	if lipgloss.Width(word) <= width {
+		return []string{word}
+	}
+
+	runes := []rune(word)
+	var parts []string
+	var chunk []rune
+	chunkWidth := 0
+	for _, r := range runes {
+		rw := lipgloss.Width(string(r))
+		if chunkWidth+rw > width && len(chunk) > 0 {
+			parts = append(parts, string(chunk))
+			chunk = nil
+			chunkWidth = 0
+		}
+		chunk = append(chunk, r)
+		chunkWidth += rw
+	}
+	if len(chunk) > 0 {
+		parts = append(parts, string(chunk))
+	}
+	return parts
+}
+
+func indentBlock(s, indent string) string {
+	if s == "" {
+		return indent
+	}
+	lines := strings.Split(s, "\n")
+	for i := range lines {
+		lines[i] = indent + lines[i]
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderDetailBlock(title, body string, width int, border lipgloss.Color) string {
+	boxWidth := width
+	if boxWidth < 20 {
+		boxWidth = 20
+	}
+	titleStyle := lipgloss.NewStyle().Foreground(border).Bold(true)
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(border).
+		Padding(0, 1).
+		Width(boxWidth)
+	return boxStyle.Render(titleStyle.Render(title) + "\n\n" + body)
 }

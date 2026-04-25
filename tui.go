@@ -28,9 +28,7 @@ var (
 	colRed    = lipgloss.Color("#ef4444")
 
 	styleHeader = lipgloss.NewStyle().
-			Background(lipgloss.Color("#111113")).
-			Foreground(colText).
-			Bold(true)
+			Background(lipgloss.Color("#111113"))
 
 	styleTab = lipgloss.NewStyle().
 			Foreground(colDim).
@@ -72,6 +70,14 @@ const (
 	viewModels
 )
 
+type sessionScreen int
+
+const (
+	sessionScreenList sessionScreen = iota
+	sessionScreenRequests
+	sessionScreenRequestDetail
+)
+
 type rangeKey int
 
 const (
@@ -94,6 +100,11 @@ var rangeLabels = map[rangeKey]string{
 
 type dataLoadedMsg struct{ data dashboardData }
 type tickMsg struct{}
+type sessionRequestsLoadedMsg struct {
+	sessionID string
+	data      sessionRequestsResponse
+	err       error
+}
 
 // ── Main model ────────────────────────────────────────────────────────────────
 
@@ -114,8 +125,20 @@ type tuiModel struct {
 	modelTable   table.Model
 	viewport     viewport.Model
 
-	filterMode   bool
-	filterText   string
+	filterMode bool
+	filterText string
+
+	sessionRows          []sessionRow
+	sessionScreen        sessionScreen
+	selectedSession      *sessionRow
+	selectedSessionReqs  *sessionRequestsResponse
+	selectedRequestIndex int
+	detailViewport       viewport.Model
+	detailLoading        bool
+	detailErr            string
+
+	confirmQuit  bool
+	quitFocusYes bool
 }
 
 func newTUIModel() tuiModel {
@@ -124,11 +147,12 @@ func newTUIModel() tuiModel {
 	sp.Style = lipgloss.NewStyle().Foreground(colEm)
 
 	return tuiModel{
-		loading:   true,
-		scanning:  true,
-		spinner:   sp,
-		dateRange: range30d,
-		viewport:  viewport.New(0, 0),
+		loading:        true,
+		scanning:       true,
+		spinner:        sp,
+		dateRange:      range30d,
+		viewport:       viewport.New(0, 0),
+		detailViewport: viewport.New(0, 0),
 	}
 }
 
@@ -182,11 +206,29 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.rebuildTables()
 		return m, tickCmd()
 
+	case sessionRequestsLoadedMsg:
+		m.detailLoading = false
+		if msg.err != nil {
+			m.detailErr = msg.err.Error()
+			m.selectedSessionReqs = nil
+			return m, nil
+		}
+		m.detailErr = ""
+		data := msg.data
+		m.selectedSessionReqs = &data
+		m.sessionScreen = sessionScreenRequests
+		m.selectedRequestIndex = 0
+		m.rebuildDetailViewport()
+		return m, nil
+
 	case tickMsg:
 		m.scanning = true
 		return m, tea.Batch(m.spinner.Tick, doScanAndLoad())
 
 	case tea.KeyMsg:
+		if m.confirmQuit {
+			return m.handleQuitConfirmKey(msg)
+		}
 		// filter mode captures all keys
 		if m.filterMode {
 			return m.handleFilterKey(msg)
@@ -206,9 +248,15 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.view == viewSessions && m.sessionScreen != sessionScreenList {
+		return m.handleSessionDetailKey(msg)
+	}
+
 	switch msg.String() {
 	case "q", "ctrl+c":
-		return m, tea.Quit
+		m.confirmQuit = true
+		m.quitFocusYes = false
+		return m, nil
 
 	case "?":
 		m.showHelp = !m.showHelp
@@ -225,15 +273,19 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "1":
 		m.view = viewOverview
 		m.showHelp = false
+		m.syncTableFocus()
 	case "2":
 		m.view = viewSessions
 		m.showHelp = false
+		m.syncTableFocus()
 	case "3":
 		m.view = viewModels
 		m.showHelp = false
+		m.syncTableFocus()
 	case "tab":
 		m.view = (m.view + 1) % 3
 		m.showHelp = false
+		m.syncTableFocus()
 
 	// Date range
 	case "t":
@@ -259,11 +311,27 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Filter (sessions view only)
 	case "/":
-		if m.view == viewSessions {
+		if m.view == viewSessions && m.sessionScreen == sessionScreenList {
 			m.filterMode = true
 			m.filterText = ""
 		}
 		return m, nil
+
+	case "enter":
+		if m.view == viewSessions && m.sessionScreen == sessionScreenList {
+			session := m.selectedSessionRow()
+			if session == nil {
+				return m, nil
+			}
+			m.selectedSession = session
+			m.selectedSessionReqs = nil
+			m.selectedRequestIndex = 0
+			m.detailErr = ""
+			m.detailLoading = true
+			m.sessionScreen = sessionScreenRequests
+			m.rebuildDetailViewport()
+			return m, loadSessionRequests(session.SessionID)
+		}
 	}
 
 	// Navigation
@@ -277,6 +345,107 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.modelTable, cmd = m.modelTable.Update(msg)
 	}
 	return m, cmd
+}
+
+func (m tuiModel) handleSessionDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "ctrl+c":
+		m.confirmQuit = true
+		m.quitFocusYes = false
+		return m, nil
+	case "?":
+		m.showHelp = !m.showHelp
+		return m, nil
+	case "esc", "backspace":
+		switch m.sessionScreen {
+		case sessionScreenRequestDetail:
+			m.sessionScreen = sessionScreenRequests
+			m.rebuildDetailViewport()
+		case sessionScreenRequests:
+			m.sessionScreen = sessionScreenList
+			m.selectedSessionReqs = nil
+			m.selectedSession = nil
+			m.detailErr = ""
+			m.detailLoading = false
+			m.syncTableFocus()
+		}
+		return m, nil
+	case "enter":
+		if m.sessionScreen == sessionScreenRequests && m.selectedRequest() != nil {
+			m.sessionScreen = sessionScreenRequestDetail
+			m.rebuildDetailViewport()
+		}
+		return m, nil
+	case "g":
+		if m.sessionScreen == sessionScreenRequests {
+			m.selectedRequestIndex = 0
+			m.rebuildDetailViewport()
+			return m, nil
+		}
+	case "G":
+		if m.sessionScreen == sessionScreenRequests && m.selectedSessionReqs != nil && len(m.selectedSessionReqs.Groups) > 0 {
+			m.selectedRequestIndex = len(m.selectedSessionReqs.Groups) - 1
+			m.rebuildDetailViewport()
+			return m, nil
+		}
+	}
+
+	switch m.sessionScreen {
+	case sessionScreenRequests:
+		switch msg.String() {
+		case "j", "down":
+			if m.selectedSessionReqs != nil && m.selectedRequestIndex < len(m.selectedSessionReqs.Groups)-1 {
+				m.selectedRequestIndex++
+				m.rebuildDetailViewport()
+			}
+			return m, nil
+		case "k", "up":
+			if m.selectedRequestIndex > 0 {
+				m.selectedRequestIndex--
+				m.rebuildDetailViewport()
+			}
+			return m, nil
+		}
+	case sessionScreenRequestDetail:
+		var cmd tea.Cmd
+		m.detailViewport, cmd = m.detailViewport.Update(msg)
+		return m, cmd
+	}
+
+	return m, nil
+}
+
+func (m tuiModel) handleQuitConfirmKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "left", "h":
+		m.quitFocusYes = true
+		return m, nil
+	case "right", "l":
+		m.quitFocusYes = false
+		return m, nil
+	case "tab", "shift+tab":
+		m.quitFocusYes = !m.quitFocusYes
+		return m, nil
+	case "y", "Y":
+		m.quitFocusYes = true
+		return m, tea.Quit
+	case "n", "N":
+		m.confirmQuit = false
+		m.quitFocusYes = false
+		return m, nil
+	case "enter":
+		if m.quitFocusYes {
+			return m, tea.Quit
+		}
+		m.confirmQuit = false
+		m.quitFocusYes = false
+		return m, nil
+	case "q", "ctrl+c", "esc":
+		m.confirmQuit = false
+		m.quitFocusYes = false
+		return m, nil
+	}
+	return m, nil
 }
 
 func (m tuiModel) handleFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -306,7 +475,9 @@ func (m *tuiModel) rebuildTables() {
 	}
 	m.buildSessionTable()
 	m.buildModelTable()
+	m.syncTableFocus()
 	m.buildOverviewViewport()
+	m.rebuildDetailViewport()
 }
 
 func (m *tuiModel) buildOverviewViewport() {
@@ -319,6 +490,27 @@ func (m *tuiModel) buildOverviewViewport() {
 	}
 	m.viewport = viewport.New(m.width, bodyH)
 	m.viewport.SetContent(renderOverview(*m))
+}
+
+func (m *tuiModel) rebuildDetailViewport() {
+	if m.width == 0 || m.height == 0 {
+		return
+	}
+	headerH := lipgloss.Height(m.renderHeader())
+	footerH := lipgloss.Height(m.renderFooter())
+	bodyH := m.height - headerH - footerH
+	if bodyH < 1 {
+		bodyH = 1
+	}
+
+	m.detailViewport = viewport.New(m.width, bodyH)
+	switch m.sessionScreen {
+	case sessionScreenRequests:
+		m.detailViewport.SetContent(renderSessionRequests(*m, bodyH))
+		m.detailViewport.SetYOffset(m.selectedRequestOffset())
+	case sessionScreenRequestDetail:
+		m.detailViewport.SetContent(renderRequestDetail(*m, bodyH))
+	}
 }
 
 func (m *tuiModel) buildSessionTable() {
@@ -336,6 +528,7 @@ func (m *tuiModel) buildSessionTable() {
 	filter := strings.ToLower(m.filterText)
 
 	var rows []table.Row
+	var sessionRows []sessionRow
 	for _, s := range m.data.SessionsAll {
 		if cutoff != "" && s.LastDate < cutoff {
 			continue
@@ -355,6 +548,7 @@ func (m *tuiModel) buildSessionTable() {
 			fmtCost(cost),
 			dur,
 		})
+		sessionRows = append(sessionRows, s)
 	}
 
 	tableHeight := m.height - 8 // header + footer + table header
@@ -381,6 +575,7 @@ func (m *tuiModel) buildSessionTable() {
 		Bold(false)
 	t.SetStyles(ts)
 	m.sessionTable = t
+	m.sessionRows = sessionRows
 }
 
 func (m *tuiModel) buildModelTable() {
@@ -483,10 +678,18 @@ func (m tuiModel) View() string {
 		case viewOverview:
 			body = m.viewport.View()
 		case viewSessions:
-			body = renderSessions(m, bodyH)
+			if m.sessionScreen == sessionScreenList {
+				body = renderSessions(m, bodyH)
+			} else {
+				body = m.detailViewport.View()
+			}
 		case viewModels:
 			body = renderModels(m, bodyH)
 		}
+	}
+
+	if m.confirmQuit {
+		body = m.renderQuitConfirm(body)
 	}
 
 	return header + "\n" + body + "\n" + footer
@@ -530,12 +733,38 @@ func (m tuiModel) renderFooter() string {
 		keyHint("1-3", "switch view"),
 		keyHint("t/d/w/m/a", "date range"),
 		keyHint("r", "refresh"),
-		keyHint("/", "filter"),
 		keyHint("?", "help"),
 		keyHint("q", "quit"),
 	}
+	if m.view == viewSessions && m.sessionScreen == sessionScreenList {
+		keys = append(keys[:3], append([]string{keyHint("/", "filter")}, keys[3:]...)...)
+	}
+	if m.view == viewSessions && m.sessionScreen != sessionScreenList {
+		keys = []string{
+			keyHint("enter", "open"),
+			keyHint("esc", "back"),
+			keyHint("j/k", "move"),
+			keyHint("?", "help"),
+			keyHint("q", "quit"),
+		}
+		if m.sessionScreen == sessionScreenRequestDetail {
+			keys = []string{
+				keyHint("↑/↓", "scroll"),
+				keyHint("esc", "back"),
+				keyHint("?", "help"),
+				keyHint("q", "quit"),
+			}
+		}
+	}
 	if m.filterMode {
 		keys = []string{keyHint("filter:", "/"+m.filterText+"▌"), keyHint("enter/esc", "done")}
+	}
+	if m.confirmQuit {
+		keys = []string{
+			keyHint("tab/←/→", "toggle"),
+			keyHint("enter", "select"),
+			keyHint("esc", "cancel"),
+		}
 	}
 
 	left := "  " + strings.Join(keys, "  ")
@@ -569,7 +798,8 @@ func (m tuiModel) renderHelp(h int) string {
 		{"r", "Rescan JSONL files and refresh data"},
 		{"j / k  ↑ / ↓", "Navigate table rows"},
 		{"g / G", "Jump to top / bottom of table"},
-		{"/ (sessions)", "Enter filter mode"},
+		{"enter (sessions)", "Open session or request detail"},
+		{"/ (sessions list)", "Enter filter mode"},
 		{"esc", "Close filter or this help"},
 		{"?", "Toggle this help overlay"},
 		{"q / ctrl+c", "Quit"},
@@ -584,6 +814,134 @@ func (m tuiModel) renderHelp(h int) string {
 
 	box := styleHelp.Render(sb.String())
 	return center(box, m.width, h)
+}
+
+func (m tuiModel) renderQuitConfirm(body string) string {
+	_ = body
+
+	dialogStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#d4d4d8")).
+		Padding(1, 3).
+		Width(58)
+
+	title := lipgloss.NewStyle().
+		Foreground(colRed).
+		Bold(true).
+		Render("Quit clauditor?")
+
+	message := styleSub.Render("Use tab or arrow keys to choose, then press enter.")
+	yes := m.renderQuitButton("Yes", m.quitFocusYes, true)
+	no := m.renderQuitButton("No", !m.quitFocusYes, false)
+
+	rowWidth := max(lipgloss.Width(message), 32)
+	gap := rowWidth - lipgloss.Width(yes) - lipgloss.Width(no)
+	if gap < 6 {
+		gap = 6
+	}
+	buttons := yes + strings.Repeat(" ", gap) + no
+	content := lipgloss.JoinVertical(lipgloss.Left, title, "", message, "", buttons)
+	dialog := dialogStyle.Render(content)
+
+	bodyHeight := m.height - lipgloss.Height(m.renderHeader()) - lipgloss.Height(m.renderFooter())
+	if bodyHeight < 1 {
+		bodyHeight = 1
+	}
+
+	overlay := lipgloss.Place(
+		m.width,
+		bodyHeight,
+		lipgloss.Center,
+		lipgloss.Center,
+		dialog,
+	)
+
+	return overlay
+}
+
+func (m tuiModel) renderQuitButton(label string, focused bool, destructive bool) string {
+	style := lipgloss.NewStyle().
+		Padding(0, 2)
+
+	if destructive {
+		if focused {
+			style = style.Background(colRed).Foreground(lipgloss.Color("#111113")).Bold(true)
+		} else {
+			style = style.Foreground(colRed).Bold(true)
+		}
+	} else {
+		if focused {
+			style = style.Background(lipgloss.Color("#27272a")).Foreground(colText).Bold(true)
+		} else {
+			style = style.Foreground(colText).Bold(true)
+		}
+	}
+
+	return style.Render(label)
+}
+
+func loadSessionRequests(sessionID string) tea.Cmd {
+	return func() tea.Msg {
+		data, err := getSessionRequests(sessionID, 1, 10000)
+		return sessionRequestsLoadedMsg{
+			sessionID: sessionID,
+			data:      data,
+			err:       err,
+		}
+	}
+}
+
+func (m tuiModel) selectedSessionRow() *sessionRow {
+	if len(m.sessionRows) == 0 {
+		return nil
+	}
+	idx := m.sessionTable.Cursor()
+	if idx < 0 || idx >= len(m.sessionRows) {
+		return nil
+	}
+	s := m.sessionRows[idx]
+	return &s
+}
+
+func (m tuiModel) selectedRequest() *requestGroup {
+	if m.selectedSessionReqs == nil || len(m.selectedSessionReqs.Groups) == 0 {
+		return nil
+	}
+	if m.selectedRequestIndex < 0 || m.selectedRequestIndex >= len(m.selectedSessionReqs.Groups) {
+		return nil
+	}
+	return &m.selectedSessionReqs.Groups[m.selectedRequestIndex]
+}
+
+func (m tuiModel) selectedRequestOffset() int {
+	if m.selectedSessionReqs == nil || m.selectedRequestIndex <= 0 {
+		return 0
+	}
+
+	offset := lipgloss.Height(renderSessionHeader(*m.selectedSessionReqs)) + 1
+	for i := 0; i < m.selectedRequestIndex; i++ {
+		offset += lipgloss.Height(renderRequestSummaryItem(
+			m.selectedSessionReqs.Groups[i],
+			i,
+			false,
+			m.width,
+		)) + 1
+	}
+	return offset
+}
+
+func (m *tuiModel) syncTableFocus() {
+	if m.view == viewSessions && m.sessionScreen == sessionScreenList {
+		m.sessionTable.Focus()
+	} else {
+		m.sessionTable.Blur()
+	}
+
+	if m.view == viewModels {
+		m.modelTable.Focus()
+	} else {
+		m.modelTable.Blur()
+	}
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
